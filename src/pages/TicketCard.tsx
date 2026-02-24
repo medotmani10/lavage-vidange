@@ -1,0 +1,145 @@
+import { useTranslation } from 'react-i18next';
+import { Card } from '../components/Card';
+import { Button } from '../components/Button';
+import { Clock, User, Car, CheckCircle, PlayCircle, AlertCircle } from 'lucide-react';
+import type { QueueTicket, TicketStatus } from '../types';
+
+interface TicketCardProps {
+  ticket: QueueTicket;
+  onUpdateStatus: (ticketId: string, status: TicketStatus) => Promise<void>;
+}
+
+export function TicketCard({ ticket, onUpdateStatus }: TicketCardProps) {
+  const { t } = useTranslation();
+
+  const getStatusBadge = () => {
+    switch (ticket.status) {
+      case 'pending': return 'badge-pending';
+      case 'in_progress': return 'badge-progress';
+      case 'completed': return 'badge-done';
+      case 'cancelled': return 'badge-cancelled';
+      default: return 'badge-progress';
+    }
+  };
+
+  const getPriorityClass = () => {
+    switch (ticket.priority) {
+      case 'vip': return 'priority-vip';
+      case 'priority': return 'priority-high';
+      default: return 'priority-normal';
+    }
+  };
+
+  const getWaitTime = () => {
+    const created = new Date(ticket.created_at);
+    const now = new Date();
+    const diffMs = now.getTime() - created.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 60) return `${diffMins}m`;
+    const hours = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    return `${hours}h ${mins}m`;
+  };
+
+  return (
+    <div className={`ticket-card p-4 ${getPriorityClass()}`}>
+      {/* Header */}
+      <div className="flex items-start justify-between mb-3 gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="font-bold text-white text-base">#{ticket.ticket_number}</span>
+            {ticket.priority !== 'normal' && (
+              <span className={`badge ${ticket.priority === 'vip' ? 'badge-vip' : 'badge-pending'} text-[10px]`}>
+                {t(`queue.priority.${ticket.priority}`)}
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-[var(--text-secondary)] truncate">
+            {ticket.customer?.full_name || 'Client Passager'}
+          </p>
+        </div>
+        <span className={`badge ${getStatusBadge()} shrink-0`}>
+          {t(`common.${ticket.status}`)}
+        </span>
+      </div>
+
+      {/* Vehicle Info */}
+      <div className="flex items-center gap-2 text-sm text-[var(--text-primary)] mb-4 bg-[var(--bg-panel)] p-2 rounded-lg border border-[var(--border)]">
+        <div className="p-1.5 rounded-md bg-[var(--bg-hover)] text-[var(--text-muted)]">
+          <Car className="w-4 h-4" />
+        </div>
+        <span className="font-medium truncate">
+          {ticket.vehicle?.brand} {ticket.vehicle?.model} - {ticket.vehicle?.plate_number}
+        </span>
+      </div>
+
+      {/* Meta Info */}
+      <div className="grid grid-cols-2 gap-2 text-xs text-[var(--text-muted)] mb-4">
+        <div className="flex items-center gap-1.5">
+          <Clock className="w-3.5 h-3.5" />
+          <span>{getWaitTime()}</span>
+        </div>
+
+        {ticket.assigned_employee && (
+          <div className="flex items-center gap-1.5 truncate">
+            <User className="w-3.5 h-3.5" />
+            <span className="truncate">{ticket.assigned_employee.user?.full_name}</span>
+          </div>
+        )}
+
+        {ticket.total_amount > 0 && (
+          <div className="col-span-2 font-bold text-orange-400 mt-1">
+            {ticket.total_amount.toLocaleString()} DZD
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      {ticket.status === 'pending' && (
+        <div className="flex items-center gap-2 mt-auto">
+          <Button
+            variant="primary"
+            size="sm"
+            className="flex-1"
+            onClick={() => onUpdateStatus(ticket.id, 'in_progress')}
+          >
+            <PlayCircle className="w-4 h-4" />
+            <span>Démarrer</span>
+          </Button>
+
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => {
+              if (window.confirm(t('queue.confirmCancel'))) {
+                onUpdateStatus(ticket.id, 'cancelled');
+              }
+            }}
+            title="Annuler"
+          >
+            <AlertCircle className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
+
+      {ticket.status === 'in_progress' && (
+        <Button
+          variant="success"
+          size="sm"
+          className="w-full mt-auto"
+          onClick={() => onUpdateStatus(ticket.id, 'completed')}
+        >
+          <CheckCircle className="w-4 h-4" />
+          <span>Terminer Service</span>
+        </Button>
+      )}
+
+      {ticket.status === 'completed' && (
+        <div className="text-xs text-[var(--text-muted)] text-center mt-2 border-t border-[var(--border)] pt-3">
+          Terminé à: {new Date(ticket.completed_at!).toLocaleTimeString()}
+        </div>
+      )}
+    </div>
+  );
+}

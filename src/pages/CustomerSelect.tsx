@@ -1,0 +1,140 @@
+import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { usePOSStore } from '../stores/usePOSStore';
+import { supabase } from '../lib/supabase';
+import { User, Car, Briefcase } from 'lucide-react';
+import { Select } from '../components/Select';
+
+export function CustomerSelect() {
+  const { t } = useTranslation();
+  const { customerId, vehicleId, setCustomer, setVehicle } = usePOSStore();
+
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [employeeId, setEmployeeId] = useState<string>('');
+
+  useEffect(() => {
+    const fetchCustomers = async () => {
+      const { data } = await supabase.from('customers').select('id, full_name, phone, current_balance, credit_limit').eq('active', true).order('full_name');
+      if (data) setCustomers(data);
+    };
+
+    const fetchEmployees = async () => {
+      const { data } = await supabase.from('employees').select('id, position, user:users(full_name)').eq('active', true);
+      if (data) {
+        setEmployees(data.map((e: any) => ({
+          id: e.id,
+          name: e.user?.full_name,
+          position: e.position,
+        })));
+      }
+    };
+
+    fetchCustomers();
+    fetchEmployees();
+  }, []);
+
+  useEffect(() => {
+    if (!customerId) {
+      setVehicles([]);
+      setVehicle(null);
+      return;
+    }
+
+    const fetchVehicles = async () => {
+      const { data } = await supabase.from('vehicles').select('id, plate_number, brand, model, year').eq('customer_id', customerId).order('plate_number');
+      if (data) setVehicles(data);
+    };
+
+    fetchVehicles();
+  }, [customerId, setVehicle]);
+
+  const selectedCustomer = customers.find((c) => c.id === customerId);
+
+  return (
+    <div className="space-y-4">
+      {/* Customer Select */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <User className="w-4 h-4 text-primary-500" />
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider">{t('customer.customer')}</h3>
+        </div>
+        <Select
+          value={customerId || ''}
+          onChange={(e) => {
+            setCustomer(e.target.value || null);
+            setVehicle(null);
+          }}
+          options={[
+            { value: '', label: t('customer.selectCustomer') },
+            ...customers.map(c => ({
+              value: c.id,
+              label: `${c.full_name} - ${c.phone}`
+            }))
+          ]}
+          className="bg-[var(--bg-panel)] h-10 text-sm"
+        />
+      </div>
+
+      {/* Debt Warning */}
+      {selectedCustomer && selectedCustomer.current_balance > 0 && (
+        <div className="p-3 bg-danger-500/10 border border-danger-500/30 rounded-xl space-y-1 mt-2 animate-fade-in">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-danger-400 font-semibold">{t('customer.currentBalance')} En Attente</span>
+            <span className="font-black text-danger-500">{selectedCustomer.current_balance} DZD</span>
+          </div>
+          <div className="flex items-center justify-between text-xs opacity-70">
+            <span className="text-danger-400">Limite de crédit</span>
+            <span className="font-bold text-danger-400">{selectedCustomer.credit_limit} DZD</span>
+          </div>
+        </div>
+      )}
+
+      {/* Vehicle Select */}
+      {customerId && (
+        <div className="animate-fade-in">
+          <div className="flex items-center gap-2 mb-2">
+            <Car className="w-4 h-4 text-[#3b82f6]" />
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">{t('vehicle.vehicle')}</h3>
+          </div>
+          <Select
+            value={vehicleId || ''}
+            onChange={(e) => setVehicle(e.target.value || null)}
+            options={[
+              { value: '', label: t('vehicle.selectVehicle') },
+              ...vehicles.map(v => ({
+                value: v.id,
+                label: `${v.plate_number} - ${v.brand} ${v.model}`
+              }))
+            ]}
+            className="bg-[var(--bg-panel)] h-10 text-sm"
+          />
+        </div>
+      )}
+
+      {/* Employee Select */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Briefcase className="w-4 h-4 text-[#8b5cf6]" />
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider">Laveur / Technicien</h3>
+        </div>
+        <Select
+          value={employeeId}
+          onChange={(e) => {
+            setEmployeeId(e.target.value);
+            usePOSStore.getState().setEmployee(e.target.value || null);
+          }}
+          options={[
+            { value: '', label: 'Aucun Assigné' },
+            ...employees.map(emp => ({
+              value: emp.id,
+              label: `${emp.name} - ${emp.position}`
+            }))
+          ]}
+          className="bg-[var(--bg-panel)] h-10 text-sm"
+        />
+      </div>
+    </div>
+  );
+}

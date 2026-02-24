@@ -1,0 +1,237 @@
+@import "tailwindcss";
+
+/* Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Arabic:wght@300;400;500;600;700&display=swap');
+
+/* ============================================================
+   TAILWIND V4 THEME CONFIGURATION
+   ============================================================ */
+@theme {
+  /* Colors */
+  --color-primary-50: #fff7ed;
+  --color-primary-100: #ffedd5;
+  --color-primary-200: #fed7aa;
+  --color-primary-300: #fdba74;
+  --color-primary-400: #fb923c;
+  --color-primary-500: #f97316;
+  --color-primary-600: #ea6c0c;
+  --color-primary-700: #c2540a;
+  --color-primary-800: #9a3c08;
+  --color-primary-900: #7c3409;
+
+  --color-dark-50: #f0f4f8;
+  --color-dark-100: #d9e2ec;
+  --color-dark-200: #bcccdc;
+  --color-dark-300: #9fb3c8;
+  --color-dark-400: #829ab1;
+  --color-dark-500: #627d98;
+  --color-dark-600: #486581;
+  --color-dark-700: #334e68;
+  --color-dark-800: #243b53;
+  --color-dark-900: #102a43;
+  --color-dark-950: #0a1929;
+
+  --color-surface: #131d2e;
+  --color-surface-light: #1a2740;
+  --color-surface-border: #1e3248;
+  --color-surface-hover: #1f3352;
+
+  --color-success-50: #f0fdf4;
+  --color-success-400: #4ade80;
+  --color-success-500: #22c55e;
+  --color-success-600: #16a34a;
+
+  --color-warning-400: #fbbf24;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+
+  --color-danger-400: #f87171;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+
+  /* Fonts */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-arabic: 'Noto Sans Arabic', system-ui, sans-serif;
+
+  /* Shadows */
+  --shadow-glow-orange: 0 0 20px rgba(249, 115, 22, 0.25);
+  --shadow-glow-blue: 0 0 20px rgba(59, 130, 246, 0.2);
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 32px rgba(0, 0, 0, 0.4);
+
+  /* Animations */
+  --animate-fade-in: fadeIn 0.3s ease-out;
+  --animate-slide-in: slideIn 0.3s ease-out;
+  --animate-pulse-soft: pulseSoft 2s infinite;
+
+  /* Keyframes */
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateX(-8px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes pulseSoft {
+
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.6;
+    }
+  }
+}
+
+/* ============================================================
+   BASE LAYER
+   ============================================================ */
+@layer base {
+  :root {
+    --bg-base: #0a1929;
+    --bg-surface: #131d2e;
+    --bg-panel: #1a2740;
+    --bg-hover: #1f3352;
+    --border: #1e3248;
+    --border-lg: #243b53;
+
+    --text-primary: #f0f4f8;
+    --text-secondary: #829ab1;
+    --text-muted: #627d98;
+
+    --orange: #f97316;
+    --orange-dark: #ea6c0c;
+    --orange-glow: rgba(249, 115, 22, 0.2);
+
+    --sidebar-w: 260px;
+    --header-h: 64px;
+    --radius: 12px;
+    --radius-lg: 16px;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+  }
+
+  html[dir="rtl"] body {
+    font-family: var(--font-arabic);
+  }
+}
+
+/* ============================================================
+   COMPONENTS UTILITIES
+   ============================================================ */
+@layer components {
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--bg-surface);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-lg);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+  }
+
+  /* Gradients */
+  .text-gradient {
+    background: linear-gradient(135deg, var(--orange), #fb923c);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Form Inputs (with var() usage instead of missing tailwind classes) */
+  .input-dark {
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border-lg);
+    border-radius: 8px;
+    color: var(--text-primary);
+    transition: all 0.2s ease;
+  }
+
+  .input-dark:focus {
+    outline: none;
+    border-color: var(--orange);
+    box-shadow: 0 0 0 3px var(--orange-glow);
+  }
+
+  .input-dark::placeholder {
+    color: var(--text-muted);
+  }
+
+  /* Data Tables */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .data-table th {
+    padding: 12px 16px;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    background: rgba(10, 25, 41, 0.5);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .data-table td {
+    padding: 16px 16px;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    border-bottom: 1px solid rgba(30, 50, 72, 0.5);
+    transition: background 0.15s ease;
+  }
+
+  .data-table tr:hover td {
+    background: rgba(31, 51, 82, 0.4);
+    color: var(--text-primary);
+  }
+}
+
+/* Print Styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: white;
+    color: black;
+  }
+}
