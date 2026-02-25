@@ -47,9 +47,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
       // Resolve relations manually for offline view
       const resolvedTickets = await Promise.all(tickets.map(async (t) => {
-        const customer = await db.customers.get(t.customer_id);
-        const vehicle = await db.vehicles.get(t.vehicle_id);
-        const employee = t.assigned_employee_id ? await db.employees.get(t.assigned_employee_id) : null;
+        let customer = null;
+        if (t.customer_id) {
+          customer = await db.customers.get(t.customer_id).catch(() => null);
+        }
+
+        let vehicle = null;
+        if (t.vehicle_id && t.vehicle_id !== t.customer_id) {
+          vehicle = await db.vehicles.get(t.vehicle_id).catch(() => null);
+        }
+
+        const employee = t.assigned_employee_id ? await db.employees.get(t.assigned_employee_id).catch(() => null) : null;
 
         return {
           ...t,
@@ -58,14 +66,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             full_name: customer.full_name,
             phone: customer.phone,
             email: customer.email
-          } : null,
+          } : { full_name: 'Client Kiosque' }, // Fallback for kiosk tickets before customer syncs
           vehicle: vehicle ? {
             id: vehicle.id,
             plate_number: vehicle.plate_number,
             brand: vehicle.brand,
             model: vehicle.model,
             year: vehicle.year
-          } : null,
+          } : { plate_number: 'N/A' }, // Fallback for kiosk tickets without explicit vehicles
           employee: employee ? {
             id: employee.id,
             position: employee.position,
@@ -84,8 +92,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   subscribeToTickets: () => {
     // Basic polling fallback for when we can't use live query directly
     // Ideally components will use Dexie useLiveQuery.
-    // For now we just return a no-op unsubscribe
-    return () => { };
+    // Listen to custom event dispatched by sync.ts
+    const handleSync = () => get().fetchTickets();
+    window.addEventListener('dexie-sync-update', handleSync);
+    return () => { window.removeEventListener('dexie-sync-update', handleSync); };
   },
 
   createTicket: async (ticketData) => {

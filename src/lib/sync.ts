@@ -158,14 +158,22 @@ export function setupRealtimeSync() {
         if (!(table in db)) return;
 
         try {
+            let changed = false;
             if (eventType === 'INSERT' || eventType === 'UPDATE') {
                 if (newRec && Object.keys(newRec).length > 0) {
                     await (db as any)[table].put(newRec);
+                    changed = true;
                 }
             } else if (eventType === 'DELETE') {
                 if (oldRec && oldRec.id) {
                     await (db as any)[table].delete(oldRec.id);
+                    changed = true;
                 }
+            }
+
+            // Notify React components to re-fetch if they rely on manual store queries
+            if (changed) {
+                window.dispatchEvent(new CustomEvent('dexie-sync-update'));
             }
         } catch (err) {
             console.error('Error applying realtime update to Dexie:', err);
