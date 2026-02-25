@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import {
@@ -13,16 +14,6 @@ import {
   Download
 } from 'lucide-react';
 
-interface DashboardStats {
-  daily_revenue: number;
-  monthly_revenue: number;
-  total_revenue: number;
-  pending_debts: number;
-  supplier_debts: number;
-  employee_commissions: number;
-  tickets_today: number;
-  tickets_month: number;
-}
 
 interface DailyRevenue {
   date: string;
@@ -33,64 +24,83 @@ interface DailyRevenue {
 
 export function Finance() {
   const { t } = useTranslation();
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [dailyRevenue, setDailyRevenue] = useState<DailyRevenue[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState<'today' | 'week' | 'month'>('week');
 
-  useEffect(() => {
-    fetchStats();
-    fetchDailyRevenue();
-  }, [selectedPeriod]);
+  const stats = useLiveQuery(async () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  const fetchStats = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('view_dashboard_stats' as any)
-      .select('*')
-      .single();
+    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    if (data && !error) {
-      // Also fetch supplier debts and employee commissions
-      const [suppliersData, employeesData] = await Promise.all([
-        supabase
-          .from('suppliers')
-          .select('balance_owed')
-          .eq('active', true),
-        supabase
-          .from('employees')
-          .select('pending_commissions')
-          .eq('active', true)
-      ]);
+    const tickets = await db.queue_tickets.toArray();
+    const completedTickets = tickets.filter(t => t.status === 'completed');
 
-      const supplier_debts = (suppliersData.data as any[])?.reduce((sum, s) => sum + s.balance_owed, 0) || 0;
-      const employee_commissions = (employeesData.data as any[])?.reduce((sum, e) => sum + e.pending_commissions, 0) || 0;
+    const ticketsToday = completedTickets.filter(t => new Date(t.created_at).getTime() >= today.getTime());
+    const ticketsMonth = completedTickets.filter(t => new Date(t.created_at).getTime() >= firstDayOfMonth.getTime());
 
-      setStats({
-        daily_revenue: (data as any).daily_revenue || 0,
-        monthly_revenue: 0, // Would need custom query
-        total_revenue: (data as any).daily_revenue || 0, // Simplified
-        pending_debts: (data as any).pending_debts || 0,
-        supplier_debts,
-        employee_commissions,
-        tickets_today: (data as any).completed_today || 0,
-        tickets_month: 0,
+    const daily_revenue = ticketsToday.reduce((sum, t) => sum + (t.total_amount || 0), 0);
+    const monthly_revenue = ticketsMonth.reduce((sum, t) => sum + (t.total_amount || 0), 0);
+    const total_revenue = completedTickets.reduce((sum, t) => sum + (t.total_amount || 0), 0);
+
+    const debts = await db.debts.toArray();
+    const pending_debts = debts
+      .filter(d => d.status !== 'completed' && d.status !== 'cancelled')
+      .reduce((sum, d) => sum + (d.remaining_amount || 0), 0);
+
+    const suppliers = await db.suppliers.toArray();
+    const supplier_debts = suppliers.reduce((sum, s: any) => sum + (s.balance_owed || 0), 0);
+
+    const employees = await db.employees.toArray();
+    const employee_commissions = employees
+      .filter(e => (e as any).active !== false)
+      .reduce((sum, e) => sum + (e.pending_commissions || 0), 0);
+
+    return {
+      daily_revenue,
+      monthly_revenue,
+      total_revenue,
+      pending_debts,
+      supplier_debts,
+      employee_commissions,
+      tickets_today: ticketsToday.length,
+      tickets_month: ticketsMonth.length
+    };
+  });
+
+  const dailyRevenue = useLiveQuery(async () => {
+    const days = selectedPeriod === 'week' ? 7 : 30;
+    const result: DailyRevenue[] = [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tickets = await db.queue_tickets.toArray();
+
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dayStart = d.getTime();
+      const dayEnd = dayStart + 86400000;
+
+      const dayTickets = tickets.filter(t => {
+        const time = new Date(t.created_at).getTime();
+        return time >= dayStart && time < dayEnd;
+      });
+
+      const completedDayTickets = dayTickets.filter(t => t.status === 'completed');
+
+      result.push({
+        date: d.toISOString(),
+        ticket_count: dayTickets.length,
+        gross_revenue: completedDayTickets.reduce((sum, t) => sum + (t.total_amount || 0), 0),
+        collected_amount: completedDayTickets.reduce((sum, t) => sum + (t.paid_amount || 0), 0)
       });
     }
-    setIsLoading(false);
-  };
 
-  const fetchDailyRevenue = async () => {
-    const { data, error } = await supabase
-      .from('view_daily_revenue')
-      .select('*')
-      .limit(selectedPeriod === 'week' ? 7 : 30)
-      .order('date', { ascending: true });
+    return result;
+  }, [selectedPeriod]);
 
-    if (data && !error) {
-      setDailyRevenue(data);
-    }
-  };
+  const isLoading = stats === undefined || dailyRevenue === undefined;
 
   if (isLoading) {
     return (
@@ -222,7 +232,7 @@ export function Finance() {
               <p className="text-sm text-[var(--text-muted)] font-medium">{t('finance.lastDays', { days: selectedPeriod === 'week' ? 7 : 30 })}</p>
             </div>
             <div className="p-5 flex-1 min-h-[300px]">
-              {dailyRevenue.length > 0 ? (
+              {dailyRevenue && dailyRevenue.length > 0 ? (
                 <div className="h-full w-full">
                   <div className="flex items-end justify-between h-full gap-2">
                     {dailyRevenue.map((day, index) => {

@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -9,6 +11,7 @@ import { Plus, Search, User, Edit2, Trash2, Phone, DollarSign, TrendingUp, X } f
 
 interface Employee {
   id: string;
+  full_name: string;
   user_id?: string;
   position: string;
   phone: string;
@@ -33,70 +36,53 @@ interface UserOption {
 
 export function Employees() {
   const { t } = useTranslation();
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
 
-  useEffect(() => {
-    fetchEmployees();
-    fetchUserOptions();
-  }, []);
+  const employeesData = useLiveQuery(async () => {
+    const all = await db.employees.toArray();
+    const active = all.filter(e => (e as any).active !== false);
 
-  const fetchEmployees = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('employees')
-      .select(`
-        *,
-        user:users (
-          full_name,
-          email,
-          role
-        )
-      `)
-      .eq('active', true)
-      .order('position');
+    const resolved = await Promise.all(active.map(async (e) => {
+      const user = e.user_id ? await db.users.get(e.user_id) : undefined;
+      return {
+        ...e,
+        user: user ? {
+          full_name: user.full_name,
+          email: user.email,
+          role: user.role
+        } : undefined
+      };
+    }));
 
-    if (data && !error) {
-      setEmployees(data);
-    }
-    setIsLoading(false);
-  };
+    return resolved.sort((a, b) => a.position.localeCompare(b.position));
+  });
 
-  const fetchUserOptions = async () => {
-    const { data } = await supabase
-      .from('users')
-      .select('id, full_name, email, role')
-      .eq('active', true)
-      .order('full_name');
+  const userOptionsData = useLiveQuery(async () => {
+    const all = await db.users.toArray();
+    return all.filter(u => u.active !== false)
+      .map(u => ({ id: u.id, full_name: u.full_name, email: u.email, role: u.role }))
+      .sort((a, b) => a.full_name.localeCompare(b.full_name));
+  });
 
-    if (data) {
-      setUserOptions(data);
-    }
-  };
+  const isLoading = employeesData === undefined || userOptionsData === undefined;
+  const employees = employeesData as Employee[] || [];
+  const userOptions = userOptionsData as UserOption[] || [];
 
   const filteredEmployees = employees.filter((employee) => {
     const query = searchQuery.toLowerCase();
-    const name = employee.user?.full_name?.toLowerCase() || '';
+    const name = employee.full_name?.toLowerCase() || '';
     const position = employee.position.toLowerCase();
     const phone = employee.phone.toLowerCase();
 
     return name.includes(query) || position.includes(query) || phone.includes(query);
   });
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (employee: Employee) => {
     if (!confirm(t('messages.deleteConfirm'))) return;
 
-    const { error } = await (supabase.from('employees') as any)
-      .update({ active: false })
-      .eq('id', id);
-
-    if (!error) {
-      fetchEmployees();
-    }
+    await queueOperation('employees', 'UPDATE', { ...employee, active: false });
   };
 
   const totalPending = employees.reduce((sum, e) => sum + e.pending_commissions, 0);
@@ -206,8 +192,8 @@ export function Employees() {
                   <tr key={employee.id} className="hover:bg-[var(--bg-hover)] transition-colors group">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div>
-                        <p className="font-bold text-white text-sm">{employee.user?.full_name || '-'}</p>
-                        <p className="text-xs text-[var(--text-secondary)] mt-0.5">{employee.user?.email || ''}</p>
+                        <p className="font-bold text-white text-sm">{employee.full_name}</p>
+                        {employee.user && <p className="text-xs text-[var(--text-secondary)] mt-0.5">{employee.user.email}</p>}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -244,7 +230,7 @@ export function Employees() {
                           <Edit2 className="w-4 h-4 text-primary-400" />
                         </button>
                         <button
-                          onClick={() => handleDelete(employee.id)}
+                          onClick={() => handleDelete(employee)}
                           className="p-2 hover:bg-danger-500/10 rounded-lg transition-colors border border-transparent hover:border-danger-500/30"
                         >
                           <Trash2 className="w-4 h-4 text-danger-400" />
@@ -267,7 +253,6 @@ export function Employees() {
           onClose={() => {
             setShowModal(false);
             setEditingEmployee(null);
-            fetchEmployees();
           }}
         />
       )}
@@ -285,6 +270,7 @@ function EmployeeModal({ employee, userOptions, onClose }: EmployeeModalProps) {
   const { t } = useTranslation();
   const [formData, setFormData] = useState({
     user_id: employee?.user_id || '',
+    full_name: employee?.full_name || '',
     position: employee?.position || '',
     phone: employee?.phone || '',
     base_salary: employee?.base_salary?.toString() || '',
@@ -296,8 +282,26 @@ function EmployeeModal({ employee, userOptions, onClose }: EmployeeModalProps) {
     e.preventDefault();
     setIsLoading(true);
 
+    let finalFullName = formData.full_name.trim();
+
+    if (!finalFullName && formData.user_id) {
+      const selectedUser = userOptions.find(u => u.id === formData.user_id);
+      if (selectedUser) {
+        finalFullName = selectedUser.full_name;
+      }
+    }
+
+    if (!finalFullName) {
+      alert(t('employee.fullNameRequired', 'Le nom complet est obligatoire.'));
+      setIsLoading(false);
+      return;
+    }
+
     const data = {
-      ...formData,
+      user_id: formData.user_id || null, // Ensure empty string becomes null
+      full_name: finalFullName,
+      position: formData.position,
+      phone: formData.phone,
       base_salary: parseFloat(formData.base_salary) || 0,
       commission_rate: parseFloat(formData.commission_rate) || 0,
       total_commissions: employee?.total_commissions || 0,
@@ -305,21 +309,24 @@ function EmployeeModal({ employee, userOptions, onClose }: EmployeeModalProps) {
       pending_commissions: employee?.pending_commissions || 0,
     };
 
-    let error;
-    if (employee) {
-      ({ error } = await (supabase.from('employees') as any)
-        .update(data)
-        .eq('id', employee.id));
-    } else {
-      ({ error } = await (supabase.from('employees') as any)
-        .insert([{ ...data, active: true }]));
-    }
-
-    setIsLoading(false);
-    if (!error) {
+    try {
+      if (employee) {
+        await queueOperation('employees', 'UPDATE', { ...employee, ...data, updated_at: new Date().toISOString() });
+      } else {
+        await queueOperation('employees', 'INSERT', {
+          id: crypto.randomUUID(),
+          ...data,
+          active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+      }
       onClose();
-    } else {
+    } catch (error) {
+      console.error(error);
       alert(t('messages.saveError'));
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -347,15 +354,21 @@ function EmployeeModal({ employee, userOptions, onClose }: EmployeeModalProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto scrollbar-thin scrollbar-thumb-gray">
+          <Input
+            label={t('employee.fullName') + ' *'}
+            value={formData.full_name}
+            onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+            placeholder="Mohamed Ali"
+          />
+
           <Select
-            label={t('employee.user')}
+            label={t('employee.user') + ' (Optionnel)'}
             value={formData.user_id}
             onChange={(e) => setFormData({ ...formData, user_id: e.target.value })}
             options={[
               { value: '', label: t('employee.selectUser') },
               ...userOpts,
             ]}
-            required
           />
 
           <Input

@@ -23,23 +23,24 @@ interface NavItem {
   name: string;
   href: string;
   icon: React.ElementType;
+  pageKey: string;
   minRole?: UserRole[];
   badge?: string;
 }
 
 const navigation: NavItem[] = [
-  { name: 'dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'queue', href: '/queue', icon: Ticket },
-  { name: 'pos', href: '/pos', icon: ShoppingCart },
-  { name: 'customers', href: '/customers', icon: Users },
-  { name: 'vehicles', href: '/vehicles', icon: Car },
-  { name: 'services', href: '/services', icon: Wrench },
-  { name: 'inventory', href: '/inventory', icon: Package },
-  { name: 'suppliers', href: '/suppliers', icon: Truck },
-  { name: 'employees', href: '/employees', icon: UserCog },
-  { name: 'finance', href: '/finance', icon: DollarSign, minRole: ['manager', 'admin'] },
-  { name: 'reports', href: '/reports', icon: FileText, minRole: ['manager', 'admin'] },
-  { name: 'settings', href: '/settings', icon: Settings, minRole: ['admin'] },
+  { name: 'dashboard', href: '/dashboard', icon: LayoutDashboard, pageKey: 'dashboard' },
+  { name: 'queue', href: '/queue', icon: Ticket, pageKey: 'queue' },
+  { name: 'pos', href: '/pos', icon: ShoppingCart, pageKey: 'pos' },
+  { name: 'customers', href: '/customers', icon: Users, pageKey: 'customers' },
+  { name: 'vehicles', href: '/vehicles', icon: Car, pageKey: 'vehicles' },
+  { name: 'services', href: '/services', icon: Wrench, pageKey: 'services' },
+  { name: 'inventory', href: '/inventory', icon: Package, pageKey: 'inventory' },
+  { name: 'suppliers', href: '/suppliers', icon: Truck, pageKey: 'suppliers' },
+  { name: 'employees', href: '/employees', icon: UserCog, pageKey: 'employees' },
+  { name: 'finance', href: '/finance', icon: DollarSign, pageKey: 'finance', minRole: ['manager', 'admin'] },
+  { name: 'reports', href: '/reports', icon: FileText, pageKey: 'reports', minRole: ['manager', 'admin'] },
+  { name: 'settings', href: '/settings', icon: Settings, pageKey: 'settings', minRole: ['admin'] },
 ];
 
 export function Sidebar() {
@@ -48,12 +49,23 @@ export function Sidebar() {
   const navigate = useNavigate();
 
   const filteredNavigation = navigation.filter((item) => {
-    if (!item.minRole) return true;
-    return hasRole(item.minRole);
+    // Role-based filter (e.g., minRole: ['admin'])
+    if (item.minRole && !hasRole(item.minRole)) return false;
+
+    // Page-access filter (admin always sees everything)
+    if (user?.role !== 'admin' && user?.allowed_pages) {
+      return user.allowed_pages.includes(item.pageKey);
+    }
+
+    return true;
   });
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error('Logout error (offline?)', e);
+    }
     logout();
     navigate('/login');
   };

@@ -1,14 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePOSStore } from '../stores/usePOSStore';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, Package, AlertTriangle, PlusCircle } from 'lucide-react';
 import { Input } from '../components/Input';
 
 interface Product {
   id: string;
-  name_fr: string;
-  name_ar: string;
+  name: string;
   category: string;
   sku: string;
   stock_quantity: number;
@@ -18,27 +18,23 @@ interface Product {
 }
 
 export function ProductsPanel() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { addItem } = usePOSStore();
 
-  const [products, setProducts] = useState<Product[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [isLoading, setIsLoading] = useState(true);
 
   const categories = ['all', 'tire', 'oil', 'accessory', 'other'];
 
-  useEffect(() => {
-    const fetchProducts = async () => {
-      const { data, error } = await supabase.from('products').select('*').eq('active', true).gt('stock_quantity', 0).order('name_fr');
-      if (data && !error) setProducts(data);
-      setIsLoading(false);
-    };
-    fetchProducts();
-  }, []);
+  const products = useLiveQuery(async () => {
+    const all = await db.products.toArray();
+    return all.filter(p => p.active && p.stock_quantity > 0).sort((a, b) => a.name.localeCompare(b.name));
+  });
 
-  const filteredProducts = products.filter((product) => {
-    const name = i18n.language === 'ar' ? product.name_ar : product.name_fr;
+  const isLoading = products === undefined;
+
+  const filteredProducts = (products || []).filter((product: any) => {
+    const name = product.name;
     const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase()) || product.sku.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === 'all' || product.category === selectedCategory;
     return matchesSearch && matchesCategory;
@@ -48,7 +44,7 @@ export function ProductsPanel() {
     addItem({
       id: product.id,
       type: 'product',
-      name: i18n.language === 'ar' ? product.name_ar : product.name_fr,
+      name: product.name,
       price: product.unit_price,
       quantity: 1,
     });
@@ -75,8 +71,8 @@ export function ProductsPanel() {
               key={cat}
               onClick={() => setSelectedCategory(cat)}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors uppercase tracking-wide border ${selectedCategory === cat
-                  ? 'bg-primary-500 border-primary-500 text-white shadow-lg'
-                  : 'bg-[var(--bg-panel)] border-[var(--border-lg)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white'
+                ? 'bg-primary-500 border-primary-500 text-white shadow-lg'
+                : 'bg-[var(--bg-panel)] border-[var(--border-lg)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white'
                 }`}
             >
               {t(`inventory.categories.${cat}`)}
@@ -106,8 +102,8 @@ export function ProductsPanel() {
                 key={product.id}
                 onClick={() => handleAddProduct(product)}
                 className={`flex flex-col text-left p-3 rounded-xl transition-all duration-200 border group ${isLowStock(product)
-                    ? 'bg-danger-500/10 border-danger-500/30 hover:border-danger-500'
-                    : 'bg-[var(--bg-panel)] border-[var(--border-lg)] hover:border-primary-500/50 hover:bg-primary-500/10'
+                  ? 'bg-danger-500/10 border-danger-500/30 hover:border-danger-500'
+                  : 'bg-[var(--bg-panel)] border-[var(--border-lg)] hover:border-primary-500/50 hover:bg-primary-500/10'
                   }`}
               >
                 <div className="flex items-start justify-between w-full mb-2">
@@ -115,14 +111,14 @@ export function ProductsPanel() {
                     <Package className="w-4 h-4 text-[var(--text-secondary)]" />
                   </div>
                   {isLowStock(product) ? (
-                    <AlertTriangle className="w-4 h-4 text-danger-400 shrink-0" title="Stock Faible" />
+                    <AlertTriangle className="w-4 h-4 text-danger-400 shrink-0" />
                   ) : (
                     <PlusCircle className="w-4 h-4 text-primary-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                   )}
                 </div>
 
-                <h3 className="font-bold text-[12px] text-white leading-tight mb-1 truncate w-full" title={i18n.language === 'ar' ? product.name_ar : product.name_fr}>
-                  {i18n.language === 'ar' ? product.name_ar : product.name_fr}
+                <h3 className="font-bold text-[12px] text-white leading-tight mb-1 truncate w-full" title={product.name}>
+                  {product.name}
                 </h3>
                 {product.brand && <p className="text-[10px] text-[var(--text-muted)] truncate w-full">{product.brand}</p>}
 

@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePOSStore } from '../stores/usePOSStore';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { User, Car, Briefcase } from 'lucide-react';
 import { Select } from '../components/Select';
 
@@ -9,46 +10,27 @@ export function CustomerSelect() {
   const { t } = useTranslation();
   const { customerId, vehicleId, setCustomer, setVehicle } = usePOSStore();
 
-  const [customers, setCustomers] = useState<any[]>([]);
-  const [vehicles, setVehicles] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
   const [employeeId, setEmployeeId] = useState<string>('');
 
-  useEffect(() => {
-    const fetchCustomers = async () => {
-      const { data } = await supabase.from('customers').select('id, full_name, phone, current_balance, credit_limit').eq('active', true).order('full_name');
-      if (data) setCustomers(data);
-    };
+  const customers = useLiveQuery(async () => {
+    const all = await db.customers.toArray();
+    return all.filter(c => c.active !== false).sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }) || [];
 
-    const fetchEmployees = async () => {
-      const { data } = await supabase.from('employees').select('id, position, user:users(full_name)').eq('active', true);
-      if (data) {
-        setEmployees(data.map((e: any) => ({
-          id: e.id,
-          name: e.user?.full_name,
-          position: e.position,
-        })));
-      }
-    };
+  const employees = useLiveQuery(async () => {
+    const all = await db.employees.toArray();
+    return all.filter(e => e.active !== false).map(e => ({
+      id: e.id,
+      name: e.full_name || 'Unknown',
+      position: e.position
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }) || [];
 
-    fetchCustomers();
-    fetchEmployees();
-  }, []);
-
-  useEffect(() => {
-    if (!customerId) {
-      setVehicles([]);
-      setVehicle(null);
-      return;
-    }
-
-    const fetchVehicles = async () => {
-      const { data } = await supabase.from('vehicles').select('id, plate_number, brand, model, year').eq('customer_id', customerId).order('plate_number');
-      if (data) setVehicles(data);
-    };
-
-    fetchVehicles();
-  }, [customerId, setVehicle]);
+  const vehicles = useLiveQuery(async () => {
+    if (!customerId) return [];
+    const all = await db.vehicles.where('customer_id').equals(customerId).toArray();
+    return all.sort((a, b) => a.plate_number.localeCompare(b.plate_number));
+  }, [customerId]) || [];
 
   const selectedCustomer = customers.find((c) => c.id === customerId);
 

@@ -28,7 +28,11 @@ export function Header() {
   const pageKey = pageTitles[location.pathname] || 'navigation.dashboard';
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error('Logout error (offline?)', e);
+    }
     logout();
     navigate('/login');
   };

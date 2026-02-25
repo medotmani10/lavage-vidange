@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -19,29 +21,17 @@ interface Supplier {
 
 export function Suppliers() {
   const { t } = useTranslation();
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
 
-  useEffect(() => {
-    fetchSuppliers();
-  }, []);
+  const suppliersData = useLiveQuery(async () => {
+    const all = await db.suppliers.toArray();
+    return all.filter(s => s.active !== false).sort((a, b) => a.company_name.localeCompare(b.company_name));
+  });
 
-  const fetchSuppliers = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('suppliers')
-      .select('*')
-      .eq('active', true)
-      .order('company_name');
-
-    if (data && !error) {
-      setSuppliers(data);
-    }
-    setIsLoading(false);
-  };
+  const isLoading = suppliersData === undefined;
+  const suppliers = suppliersData as Supplier[] || [];
 
   const filteredSuppliers = suppliers.filter((supplier) => {
     const query = searchQuery.toLowerCase();
@@ -53,16 +43,10 @@ export function Suppliers() {
     );
   });
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (supplier: Supplier) => {
     if (!confirm(t('messages.deleteConfirm'))) return;
 
-    const { error } = await (supabase.from('suppliers') as any)
-      .update({ active: false })
-      .eq('id', id);
-
-    if (!error) {
-      fetchSuppliers();
-    }
+    await queueOperation('suppliers', 'UPDATE', { ...supplier, active: false });
   };
 
   const totalBalance = suppliers.reduce((sum, s) => sum + s.balance_owed, 0);
@@ -135,7 +119,7 @@ export function Suppliers() {
                 setEditingSupplier(supplier);
                 setShowModal(true);
               }}
-              onDelete={() => handleDelete(supplier.id)}
+              onDelete={() => handleDelete(supplier)}
             />
           ))}
         </div>
@@ -148,7 +132,6 @@ export function Suppliers() {
           onClose={() => {
             setShowModal(false);
             setEditingSupplier(null);
-            fetchSuppliers();
           }}
         />
       )}
@@ -262,21 +245,24 @@ function SupplierModal({ supplier, onClose }: SupplierModalProps) {
       balance_owed: supplier?.balance_owed || 0,
     };
 
-    let error;
-    if (supplier) {
-      ({ error } = await (supabase.from('suppliers') as any)
-        .update(data)
-        .eq('id', supplier.id));
-    } else {
-      ({ error } = await (supabase.from('suppliers') as any)
-        .insert([{ ...data, active: true }]));
-    }
-
-    setIsLoading(false);
-    if (!error) {
+    try {
+      if (supplier) {
+        await queueOperation('suppliers', 'UPDATE', { ...supplier, ...data, updated_at: new Date().toISOString() });
+      } else {
+        await queueOperation('suppliers', 'INSERT', {
+          id: crypto.randomUUID(),
+          ...data,
+          active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+      }
       onClose();
-    } else {
+    } catch (error) {
+      console.error(error);
       alert(t('messages.saveError'));
+    } finally {
+      setIsLoading(false);
     }
   };
 

@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -8,10 +10,8 @@ import { Search, Wrench, Edit2, Trash2, Plus } from 'lucide-react';
 
 interface Service {
     id: string;
-    name_fr: string;
-    name_ar: string;
-    description_fr?: string;
-    description_ar?: string;
+    name: string;
+    description?: string;
     price: number;
     cost: number;
     duration_minutes: number;
@@ -20,49 +20,31 @@ interface Service {
 }
 
 export function Services() {
-    const { t, i18n } = useTranslation();
-    const [services, setServices] = useState<Service[]>([]);
+    const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingService, setEditingService] = useState<Service | null>(null);
     const [activeTab, setActiveTab] = useState<'lavage' | 'vidange' | 'pneumatique'>('lavage');
 
-    useEffect(() => {
-        fetchServices();
-    }, []);
+    const servicesData = useLiveQuery(async () => {
+        const all = await db.services.toArray();
+        return all.filter(s => s.active !== false).sort((a, b) => a.name.localeCompare(b.name));
+    });
 
-    const fetchServices = async () => {
-        setIsLoading(true);
-        const { data, error } = await supabase
-            .from('services')
-            .select('*')
-            .eq('active', true)
-            .order('name_fr');
-
-        if (data && !error) {
-            setServices(data);
-        }
-        setIsLoading(false);
-    };
+    const isLoading = servicesData === undefined;
+    const services = (servicesData as any[]) as Service[] || [];
 
     const filteredServices = services.filter((service) => {
         const matchesTab = service.category === activeTab;
-        const name = i18n.language === 'ar' ? service.name_ar : service.name_fr;
+        const name = service.name;
         const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase());
         return matchesTab && matchesSearch;
     });
 
-    const handleDelete = async (id: string) => {
+    const handleDelete = async (service: Service) => {
         if (!confirm(t('messages.deleteConfirm'))) return;
 
-        const { error } = await (supabase.from('services') as any)
-            .update({ active: false })
-            .eq('id', id);
-
-        if (!error) {
-            fetchServices();
-        }
+        await queueOperation('services', 'UPDATE', { ...service, active: false });
     };
 
     return (
@@ -145,11 +127,11 @@ export function Services() {
                                     <tr key={service.id} className="hover:bg-[var(--bg-hover)] transition-colors group">
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <p className="font-bold text-white text-sm">
-                                                {i18n.language === 'ar' ? service.name_ar : service.name_fr}
+                                                {service.name}
                                             </p>
-                                            {(service.description_fr || service.description_ar) && (
-                                                <p className="text-xs text-[var(--text-secondary)] mt-0.5 truncate max-w-xs cursor-help" title={i18n.language === 'ar' ? service.description_ar : service.description_fr}>
-                                                    {i18n.language === 'ar' ? service.description_ar : service.description_fr}
+                                            {(service.description) && (
+                                                <p className="text-xs text-[var(--text-secondary)] mt-0.5 truncate max-w-xs cursor-help" title={service.description}>
+                                                    {service.description}
                                                 </p>
                                             )}
                                         </td>
@@ -178,7 +160,7 @@ export function Services() {
                                                     <Edit2 className="w-4 h-4 text-primary-400" />
                                                 </button>
                                                 <button
-                                                    onClick={() => handleDelete(service.id)}
+                                                    onClick={() => handleDelete(service)}
                                                     className="p-2 hover:bg-danger-500/10 rounded-lg transition-colors border border-transparent hover:border-danger-500/30"
                                                     title="Supprimer"
                                                 >
@@ -202,7 +184,6 @@ export function Services() {
                     onClose={() => {
                         setShowModal(false);
                         setEditingService(null);
-                        fetchServices();
                     }}
                 />
             )}
@@ -219,10 +200,8 @@ interface ServiceModalProps {
 function ServiceModal({ service, defaultCategory, onClose }: ServiceModalProps) {
     const { t } = useTranslation();
     const [formData, setFormData] = useState({
-        name_fr: service?.name_fr || '',
-        name_ar: service?.name_ar || '',
-        description_fr: service?.description_fr || '',
-        description_ar: service?.description_ar || '',
+        name: service?.name || '',
+        description: service?.description || '',
         price: service?.price?.toString() || '0',
         cost: service?.cost?.toString() || '0',
         duration_minutes: service?.duration_minutes?.toString() || '30',
@@ -236,10 +215,8 @@ function ServiceModal({ service, defaultCategory, onClose }: ServiceModalProps) 
         setIsLoading(true);
 
         const data: any = {
-            name_fr: formData.name_fr,
-            name_ar: formData.name_ar,
-            description_fr: formData.description_fr || null,
-            description_ar: formData.description_ar || null,
+            name: formData.name,
+            description: formData.description || null,
             price: parseFloat(formData.price) || 0,
             cost: parseFloat(formData.cost) || 0,
             duration_minutes: parseInt(formData.duration_minutes) || 30,
@@ -247,22 +224,24 @@ function ServiceModal({ service, defaultCategory, onClose }: ServiceModalProps) 
             category: formData.category,
         };
 
-        let error;
-        if (service) {
-            ({ error } = await (supabase.from('services') as any)
-                .update(data)
-                .eq('id', service.id));
-        } else {
-            data.active = true;
-            ({ error } = await (supabase.from('services') as any)
-                .insert([data]));
-        }
-
-        setIsLoading(false);
-        if (!error) {
+        try {
+            if (service) {
+                await queueOperation('services', 'UPDATE', { ...service, ...data, updated_at: new Date().toISOString() });
+            } else {
+                await queueOperation('services', 'INSERT', {
+                    id: crypto.randomUUID(),
+                    ...data,
+                    active: true,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                });
+            }
             onClose();
-        } else {
+        } catch (error) {
+            console.error(error);
             alert(t('messages.saveError'));
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -292,41 +271,23 @@ function ServiceModal({ service, defaultCategory, onClose }: ServiceModalProps) 
                         </select>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4">
                         <Input
-                            label="Nom du service (FR)"
-                            value={formData.name_fr}
-                            onChange={(e) => setFormData({ ...formData, name_fr: e.target.value })}
+                            label="Nom du service"
+                            value={formData.name}
+                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                             required
-                        />
-                        <Input
-                            label="Nom du service (AR)"
-                            value={formData.name_ar}
-                            onChange={(e) => setFormData({ ...formData, name_ar: e.target.value })}
-                            required
-                            className="text-right"
-                            dir="rtl"
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Description (FR)</label>
+                            <label className="block text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Description</label>
                             <textarea
-                                value={formData.description_fr}
-                                onChange={(e) => setFormData({ ...formData, description_fr: e.target.value })}
+                                value={formData.description}
+                                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                                 rows={2}
                                 className="w-full px-4 py-3 bg-[var(--bg-panel)] border border-[var(--border-lg)] rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none text-white text-sm"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Description (AR)</label>
-                            <textarea
-                                value={formData.description_ar}
-                                onChange={(e) => setFormData({ ...formData, description_ar: e.target.value })}
-                                rows={2}
-                                dir="rtl"
-                                className="w-full px-4 py-3 bg-[var(--bg-panel)] border border-[var(--border-lg)] rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none text-white text-sm text-right"
                             />
                         </div>
                     </div>

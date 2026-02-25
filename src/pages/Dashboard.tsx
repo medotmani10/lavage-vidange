@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useAuthStore } from '../stores/useAuthStore';
 import {
   TrendingUp,
@@ -17,60 +18,66 @@ import {
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 
-interface Stats {
-  daily_revenue: number;
-  current_queue: number;
-  completed_today: number;
-  total_customers: number;
-  low_stock: number;
-  pending_debts: number;
-}
+
 
 export function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const [stats, setStats] = useState<Stats>({
+  const statsData = useLiveQuery(async () => {
+    try {
+      const tickets = await db.queue_tickets.toArray();
+      const customersCount = await db.customers.filter(c => c.active !== false).count();
+      const stockLowCount = await db.products.filter(p => p.stock_quantity <= 5 && p.active !== false).count();
+
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const todayTickets = tickets.filter(t => new Date(t.created_at) >= todayStart);
+      const recentActivity = tickets.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 5);
+
+      const firstDayOfMonth = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+      const monthlyTickets = tickets.filter(t => new Date(t.created_at) >= firstDayOfMonth);
+
+      return {
+        daily_revenue: todayTickets
+          .filter(t => t.status === 'completed')
+          .reduce((s, t) => s + (t.total_amount || 0), 0),
+        monthly_revenue: monthlyTickets
+          .filter(t => t.status === 'completed')
+          .reduce((s, t) => s + (t.total_amount || 0), 0),
+        current_queue: tickets.filter(t => ['pending', 'in_progress'].includes(t.status)).length,
+        completed_today: todayTickets.filter(t => t.status === 'completed').length,
+        total_customers: customersCount || 0,
+        low_stock: stockLowCount || 0,
+        pending_debts: 0,
+        recentActivity: recentActivity || []
+      };
+    } catch (e) {
+      console.error(e);
+      return {
+        daily_revenue: 0,
+        monthly_revenue: 0,
+        current_queue: 0,
+        completed_today: 0,
+        total_customers: 0,
+        low_stock: 0,
+        pending_debts: 0,
+        recentActivity: []
+      };
+    }
+  });
+
+  const loading = statsData === undefined;
+  const stats = statsData || {
     daily_revenue: 0,
+    monthly_revenue: 0,
     current_queue: 0,
     completed_today: 0,
     total_customers: 0,
     low_stock: 0,
     pending_debts: 0,
-  });
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const [queueRes, customersRes, stockRes] = await Promise.all([
-          supabase.from('queue_tickets').select('status, total_amount, created_at'),
-          supabase.from('customers').select('id', { count: 'exact', head: true }),
-          supabase.from('products').select('id', { count: 'exact', head: true })
-            .lte('stock_quantity', 5),
-        ]);
-
-        const tickets: Array<{ status: string, total_amount: number | null, created_at: string | null }> = queueRes.data || [];
-        const today = new Date().toISOString().split('T')[0];
-        const todayTickets = tickets.filter(t => t.created_at?.startsWith(today));
-
-        setStats({
-          daily_revenue: todayTickets
-            .filter(t => t.status === 'completed')
-            .reduce((s, t) => s + (t.total_amount || 0), 0),
-          current_queue: tickets.filter(t => ['pending', 'in_progress'].includes(t.status)).length,
-          completed_today: todayTickets.filter(t => t.status === 'completed').length,
-          total_customers: customersRes.count || 0,
-          low_stock: stockRes.count || 0,
-          pending_debts: 0,
-        });
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchStats();
-  }, []);
+    recentActivity: [] as any[]
+  };
 
   const statCards = [
     {
@@ -120,7 +127,7 @@ export function Dashboard() {
     },
     {
       label: "Revenus totaux",
-      value: '0 DZD',
+      value: `${stats.monthly_revenue.toLocaleString()} DZD`,
       icon: TrendingUp,
       iconColor: 'text-emerald-500',
       iconBg: 'bg-emerald-500/10',
@@ -218,18 +225,33 @@ export function Dashboard() {
             </button>
           }
         >
-          <div className="flex flex-col items-center justify-center min-h-[220px] gap-4">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center border border-dashed border-[var(--border-lg)] bg-[var(--bg-panel)]">
-              <Activity className="w-8 h-8 text-[var(--text-muted)]" />
+          {stats.recentActivity && stats.recentActivity.length > 0 ? (
+            <div className="space-y-4">
+              {stats.recentActivity.map((ticket, i) => (
+                <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-[var(--bg-base)] border border-[var(--border)]">
+                  <div>
+                    <p className="font-semibold text-white">Ticket #{ticket.id.split('-')[0]}</p>
+                    <p className="text-sm text-[var(--text-muted)]">{new Date(ticket.created_at).toLocaleTimeString('fr-DZ', { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold text-success-400">{ticket.total_amount} DZD</p>
+                    <span className={`text-xs px-2 py-1 rounded-full ${ticket.status === 'completed' ? 'bg-success-500/20 text-success-500' : ticket.status === 'in_progress' ? 'bg-blue-500/20 text-blue-500' : 'bg-warning-500/20 text-warning-500'}`}>
+                      {ticket.status === 'completed' ? 'Terminé' : ticket.status === 'in_progress' ? 'En cours' : 'En attente'}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
-            <p className="text-[var(--text-muted)] text-base">
-              Aucune activité récente pour le moment.
-            </p>
-            <Button variant="outline" onClick={() => navigate('/pos')} className="mt-2 text-sm">
-              <ShoppingCart className="w-4 h-4 mr-2" />
-              Créer votre premier ticket
-            </Button>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center min-h-[220px] gap-4">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center border border-dashed border-[var(--border-lg)] bg-[var(--bg-panel)]">
+                <Activity className="w-8 h-8 text-[var(--text-muted)]" />
+              </div>
+              <p className="text-[var(--text-muted)] text-base">
+                Aucune activité récente pour le moment.
+              </p>
+            </div>
+          )}
         </Card>
       </div>
     </div>

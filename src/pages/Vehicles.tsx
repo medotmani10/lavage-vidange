@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -26,50 +28,36 @@ interface Vehicle {
 
 export function Vehicles() {
   const { t } = useTranslation();
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [customers, setCustomers] = useState<{ id: string; full_name: string }[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const customerIdFilter = searchParams.get('customer');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
 
-  useEffect(() => {
-    fetchVehicles();
-    fetchCustomers();
-  }, []);
+  const vehiclesData = useLiveQuery(async () => {
+    const allVehicles = await db.vehicles.toArray();
 
-  const fetchVehicles = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('vehicles')
-      .select(`
-        *,
-        customer:customers (
-          full_name,
-          phone
-        )
-      `)
-      .order('plate_number');
+    // Resolve customer names manually for offline support
+    const resolvedVehicles = await Promise.all(allVehicles.map(async (v) => {
+      const customer = await db.customers.get(v.customer_id);
+      return {
+        ...v,
+        customer: customer ? { full_name: customer.full_name, phone: customer.phone } : undefined
+      };
+    }));
 
-    if (data && !error) {
-      setVehicles(data);
-    }
-    setIsLoading(false);
-  };
+    return resolvedVehicles.sort((a, b) => a.plate_number.localeCompare(b.plate_number));
+  });
 
-  const fetchCustomers = async () => {
-    const { data } = await supabase
-      .from('customers')
-      .select('id, full_name')
-      .eq('active', true)
-      .order('full_name');
+  const customers = useLiveQuery(async () => {
+    const all = await db.customers.toArray();
+    return all.filter(c => c.active !== false)
+      .map(c => ({ id: c.id, full_name: c.full_name }))
+      .sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }) || [];
 
-    if (data) {
-      setCustomers(data);
-    }
-  };
+  const isLoading = vehiclesData === undefined;
+  const vehicles = vehiclesData as Vehicle[] || [];
 
   const filteredVehicles = vehicles.filter((vehicle) => {
     // If a customer filter is present via URL, apply it first
@@ -89,14 +77,7 @@ export function Vehicles() {
   const handleDelete = async (id: string) => {
     if (!confirm(t('messages.deleteConfirm'))) return;
 
-    const { error } = await supabase
-      .from('vehicles')
-      .delete()
-      .eq('id', id);
-
-    if (!error) {
-      fetchVehicles();
-    }
+    await queueOperation('vehicles', 'DELETE', { id });
   };
 
   return (
@@ -230,7 +211,6 @@ export function Vehicles() {
           onClose={() => {
             setShowModal(false);
             setEditingVehicle(null);
-            fetchVehicles();
           }}
         />
       )}
@@ -268,23 +248,22 @@ function VehicleModal({ vehicle, customers, onClose }: VehicleModalProps) {
       odometer: parseInt(formData.odometer) || 0,
     };
 
-    let error;
-    if (vehicle) {
-      ({ error } = await (supabase
-        .from('vehicles') as any)
-        .update(data)
-        .eq('id', vehicle.id));
-    } else {
-      ({ error } = await (supabase
-        .from('vehicles') as any)
-        .insert([data]));
-    }
-
-    setIsLoading(false);
-    if (!error) {
+    try {
+      if (vehicle) {
+        await queueOperation('vehicles', 'UPDATE', { ...vehicle, ...data, updated_at: new Date().toISOString() });
+      } else {
+        await queueOperation('vehicles', 'INSERT', {
+          id: crypto.randomUUID(),
+          ...data,
+          created_at: new Date().toISOString()
+        });
+      }
       onClose();
-    } else {
+    } catch (error) {
+      console.error(error);
       alert(t('messages.saveError'));
+    } finally {
+      setIsLoading(false);
     }
   };
 

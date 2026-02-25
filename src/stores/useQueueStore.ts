@@ -1,12 +1,13 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
 import type { QueueTicket, TicketStatus } from '../types';
 
 interface QueueState {
   tickets: QueueTicket[];
   isLoading: boolean;
   error: string | null;
-  
+
   // Actions
   fetchTickets: (status?: TicketStatus[]) => Promise<void>;
   subscribeToTickets: () => () => void;
@@ -36,44 +37,44 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   fetchTickets: async (status) => {
     set({ isLoading: true, error: null });
-    
+
     try {
-      let query = supabase
-        .from('queue_tickets')
-        .select(`
-          *,
-          customer:customers (
-            id,
-            full_name,
-            phone,
-            email
-          ),
-          vehicle:vehicles (
-            id,
-            plate_number,
-            brand,
-            model,
-            year
-          ),
-          employee:employees (
-            id,
-            position,
-            user:users (
-              full_name
-            )
-          )
-        `)
-        .order('created_at', { ascending: false });
+      let tickets = await db.queue_tickets.orderBy('created_at').reverse().toArray();
 
       if (status && status.length > 0) {
-        query = query.in('status', status);
+        tickets = tickets.filter(t => status.includes(t.status));
       }
 
-      const { data, error } = await query;
+      // Resolve relations manually for offline view
+      const resolvedTickets = await Promise.all(tickets.map(async (t) => {
+        const customer = await db.customers.get(t.customer_id);
+        const vehicle = await db.vehicles.get(t.vehicle_id);
+        const employee = t.assigned_employee_id ? await db.employees.get(t.assigned_employee_id) : null;
 
-      if (error) throw error;
+        return {
+          ...t,
+          customer: customer ? {
+            id: customer.id,
+            full_name: customer.full_name,
+            phone: customer.phone,
+            email: customer.email
+          } : null,
+          vehicle: vehicle ? {
+            id: vehicle.id,
+            plate_number: vehicle.plate_number,
+            brand: vehicle.brand,
+            model: vehicle.model,
+            year: vehicle.year
+          } : null,
+          employee: employee ? {
+            id: employee.id,
+            position: employee.position,
+            user: { full_name: (employee as any).user?.full_name || 'Inconnu' }
+          } : null
+        };
+      }));
 
-      set({ tickets: data || [], isLoading: false });
+      set({ tickets: resolvedTickets as any, isLoading: false });
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to fetch tickets';
       set({ error: errorMessage, isLoading: false });
@@ -81,70 +82,49 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
 
   subscribeToTickets: () => {
-    const channel = supabase
-      .channel('queue_tickets_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'queue_tickets',
-        },
-        async () => {
-          // Refresh tickets on any change
-          await get().fetchTickets();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    // Basic polling fallback for when we can't use live query directly
+    // Ideally components will use Dexie useLiveQuery.
+    // For now we just return a no-op unsubscribe
+    return () => { };
   },
 
   createTicket: async (ticketData) => {
     set({ isLoading: true, error: null });
-    
-    try {
-      const { data, error } = await (supabase
-        .from('queue_tickets') as any)
-        .insert([{
-          customer_id: ticketData.customer_id,
-          vehicle_id: ticketData.vehicle_id,
-          priority: ticketData.priority || 'normal',
-          status: ticketData.status || 'pending',
-          subtotal: ticketData.subtotal || 0,
-          tax_rate: ticketData.tax_rate || 0,
-          discount: ticketData.discount || 0,
-          total_amount: ticketData.total_amount || 0,
-          paid_amount: ticketData.paid_amount || 0,
-          payment_method: ticketData.payment_method,
-          notes: ticketData.notes,
-          assigned_employee_id: ticketData.assigned_employee_id,
-        }])
-        .select(`
-          *,
-          customer:customers (
-            id,
-            full_name,
-            phone
-          ),
-          vehicle:vehicles (
-            id,
-            plate_number,
-            brand,
-            model
-          )
-        `)
-        .single();
 
-      if (error) throw error;
+    try {
+      const newTicketId = crypto.randomUUID();
+      const newTicket = {
+        id: newTicketId,
+        ticket_number: `TKT-${Math.floor(Math.random() * 1000000)}`,
+        customer_id: ticketData.customer_id,
+        vehicle_id: ticketData.vehicle_id,
+        priority: ticketData.priority || 'normal',
+        status: ticketData.status || 'pending',
+        subtotal: ticketData.subtotal || 0,
+        tax_rate: ticketData.tax_rate || 0,
+        discount: ticketData.discount || 0,
+        total_amount: ticketData.total_amount || 0,
+        paid_amount: ticketData.paid_amount || 0,
+        payment_method: ticketData.payment_method || null,
+        notes: ticketData.notes || null,
+        internal_notes: null,
+        assigned_employee_id: ticketData.assigned_employee_id || null,
+        created_at: new Date().toISOString(),
+        started_at: null,
+        completed_at: null,
+        cancelled_at: null,
+        cancelled_reason: null,
+        service_ids: [],
+        product_items: []
+      };
+
+      await queueOperation('queue_tickets', 'INSERT', newTicket);
 
       // Refresh tickets list
       await get().fetchTickets();
-      
+
       set({ isLoading: false });
-      return data;
+      return newTicket as any;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to create ticket';
       set({ error: errorMessage, isLoading: false });
@@ -154,8 +134,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   updateTicketStatus: async (ticketId, status) => {
     set({ isLoading: true, error: null });
-    
+
     try {
+      const ticket = await db.queue_tickets.get(ticketId);
+      if (!ticket) throw new Error("Ticket introuvable");
+
       const updateData: any = { status };
 
       if (status === 'in_progress') {
@@ -166,16 +149,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         updateData.cancelled_at = new Date().toISOString();
       }
 
-      const { error } = await (supabase
-        .from('queue_tickets') as any)
-        .update(updateData)
-        .eq('id', ticketId);
-
-      if (error) throw error;
+      const newTicket = { ...ticket, ...updateData };
+      await queueOperation('queue_tickets', 'UPDATE', newTicket);
 
       // Refresh tickets list
       await get().fetchTickets();
-      
+
       set({ isLoading: false });
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update ticket';
@@ -185,18 +164,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   updateTicketEmployee: async (ticketId, employeeId) => {
     set({ isLoading: true, error: null });
-    
-    try {
-      const { error } = await (supabase
-        .from('queue_tickets') as any)
-        .update({ assigned_employee_id: employeeId })
-        .eq('id', ticketId);
 
-      if (error) throw error;
+    try {
+      const ticket = await db.queue_tickets.get(ticketId);
+      if (!ticket) throw new Error("Ticket introuvable");
+
+      const newTicket = { ...ticket, assigned_employee_id: employeeId };
+      await queueOperation('queue_tickets', 'UPDATE', newTicket);
 
       // Refresh tickets list
       await get().fetchTickets();
-      
+
       set({ isLoading: false });
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update employee';

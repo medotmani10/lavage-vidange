@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['vite.svg'],
+      includeAssets: ['pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
         name: 'Lavage Vida ERP',
         short_name: 'Vida POS',
@@ -19,14 +19,14 @@ export default defineConfig({
         display: 'standalone',
         icons: [
           {
-            src: '/vite.svg',
+            src: '/pwa-192x192.png',
             sizes: '192x192',
-            type: 'image/svg+xml'
+            type: 'image/png'
           },
           {
-            src: '/vite.svg',
+            src: '/pwa-512x512.png',
             sizes: '512x512',
-            type: 'image/svg+xml'
+            type: 'image/png'
           }
         ]
       }
@@ -39,6 +39,13 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    open: true,
+    host: '127.0.0.1',
+    strictPort: true,
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
   },
+  // Set clearScreen to false to prevent Vite from obscuring Rust errors
+  clearScreen: false,
+  envPrefix: ['VITE_', 'TAURI_ENV_'],
 })

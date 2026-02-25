@@ -7,6 +7,9 @@ export interface User {
   full_name: string;
   role: UserRole;
   phone?: string;
+  pin_code?: string;
+  active?: boolean;
+  allowed_pages?: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -45,11 +48,9 @@ export type ServiceCategory = 'lavage' | 'vidange' | 'pneumatique';
 
 export interface Service {
   id: string;
-  name_fr: string;
-  name_ar: string;
+  name: string;
   category: ServiceCategory;
-  description_fr?: string;
-  description_ar?: string;
+  description?: string;
   price: number;
   duration_minutes: number;
   commission_rate: number;
@@ -63,8 +64,7 @@ export type ProductCategory = 'tire' | 'oil' | 'accessory' | 'other';
 
 export interface Product {
   id: string;
-  name_fr: string;
-  name_ar: string;
+  name: string;
   category: ProductCategory;
   sku: string;
   stock_quantity: number;
@@ -217,8 +217,7 @@ export interface FinancialTransaction {
   id: string;
   type: TransactionType;
   amount: number;
-  description_fr: string;
-  description_ar: string;
+  description: string;
   reference_type?: string;
   reference_id?: string;
   created_by: string;

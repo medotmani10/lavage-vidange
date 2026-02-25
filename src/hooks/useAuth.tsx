@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/useAuthStore';
 import { supabase } from '../lib/supabase';
-import type { UserRole } from '../types';
+import { db } from '../lib/db';
+import type { UserRole, User } from '../types';
 
 interface ProtectedRouteProps {
   children: ReactNode;
@@ -21,29 +22,45 @@ export function ProtectedRoute({ children, requiredRoles }: ProtectedRouteProps)
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session) {
+        // If we have a persisted user without an active Supabase session, treating as offline login
+        if (user) {
+          setIsChecking(false);
+          return;
+        }
         navigate('/login', { replace: true });
         return;
       }
 
       // If we have a session but no user in store, fetch user data
       if (!user) {
-        const { data: userData } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        let userData = await db.users.get(session.user.id);
+
+        if (!userData && navigator.onLine) {
+          try {
+            const { data } = await supabase
+              .from('users')
+              .select('*')
+              .eq('id', session.user.id)
+              .single();
+            if (data) {
+              userData = data;
+              await db.users.put(data);
+            }
+          } catch (e) { console.error(e) }
+        }
 
         if (userData) {
-          useAuthStore.getState().setUser(userData);
+          useAuthStore.getState().setUser(userData as any as User);
         } else {
           // User record doesn't exist, sign out
-          await supabase.auth.signOut();
+          try { await supabase.auth.signOut(); } catch (e) { }
           navigate('/login', { replace: true });
           return;
         }
       }
 
       setIsChecking(false);
+      useAuthStore.getState().setLoading(false);
     };
 
     checkAuth();

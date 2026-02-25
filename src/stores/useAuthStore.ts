@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { User, UserRole } from '../types';
 
 interface AuthState {
@@ -11,25 +12,36 @@ interface AuthState {
   hasRole: (roles: UserRole[]) => boolean;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  user: null,
-  isAuthenticated: false,
-  isLoading: true,
-  setUser: (user) => {
-    set({ 
-      user, 
-      isAuthenticated: !!user,
-      isLoading: false 
-    });
-  },
-  setLoading: (loading) => {
-    set({ isLoading: loading });
-  },
-  logout: () => {
-    set({ user: null, isAuthenticated: false });
-  },
-  hasRole: (roles) => {
-    const { user } = get();
-    return user ? roles.includes(user.role) : false;
-  },
-}));
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      isAuthenticated: false,
+      isLoading: true,
+      setUser: (user) => {
+        set({
+          user,
+          isAuthenticated: !!user,
+          isLoading: false
+        });
+      },
+      setLoading: (loading) => {
+        set({ isLoading: loading });
+      },
+      logout: () => {
+        set({ user: null, isAuthenticated: false });
+      },
+      hasRole: (roles) => {
+        const { user } = get();
+        return user ? roles.includes(user.role) : false;
+      },
+    }),
+    {
+      name: 'auth-storage', // unique name for localStorage key
+      partialize: (state) => ({
+        user: state.user,
+        isAuthenticated: state.isAuthenticated
+      }), // only save user and auth status
+    }
+  )
+);

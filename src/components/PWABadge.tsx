@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+// @ts-ignore
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { X, Download } from 'lucide-react';
 

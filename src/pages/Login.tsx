@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../stores/useAuthStore';
 import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
-import { Mail, Lock, AlertCircle, Wrench, Droplets, Gauge } from 'lucide-react';
+import { Mail, Lock, AlertCircle, Wrench, Droplets, Gauge, KeyRound, User as UserIcon } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import type { User } from '../types';
 
 export function Login() {
   const { t } = useTranslation();
@@ -14,10 +17,23 @@ export function Login() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loginMode, setLoginMode] = useState<'online' | 'offline'>('online');
+
+  const localUsers = useLiveQuery(async () => {
+    return await db.users.filter(u => u.active !== false).toArray();
+  });
 
   useEffect(() => {
+    // If the store already has an authenticated user (from persist)
+    if (useAuthStore.getState().isAuthenticated) {
+      navigate('/dashboard');
+      return;
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) navigate('/dashboard');
     });
@@ -25,10 +41,18 @@ export function Login() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === 'SIGNED_IN' && session) {
-          const { data: userData } = await supabase
-            .from('users').select('*').eq('id', session.user.id).single();
+          let userData = await db.users.get(session.user.id);
+          if (!userData && navigator.onLine) {
+            try {
+              const { data } = await supabase.from('users').select('*').eq('id', session.user.id).single();
+              if (data) {
+                userData = data;
+                await db.users.put(data);
+              }
+            } catch (e) { }
+          }
           if (userData) {
-            setUser(userData);
+            setUser(userData as any as User);
             setLoading(false);
             navigate('/dashboard');
           }
@@ -43,18 +67,59 @@ export function Login() {
     e.preventDefault();
     setError(null);
     setIsLoading(true);
+
+    if (loginMode === 'offline') {
+      try {
+        if (!selectedProfileId) throw new Error("Veuillez sélectionner un profil.");
+        if (!pin) throw new Error("Veuillez entrer votre code PIN.");
+
+        const userData = await db.users.get(selectedProfileId);
+        if (!userData) throw new Error("Profil introuvable localement.");
+
+        if (userData.pin_code !== pin) {
+          throw new Error("Code PIN incorrect.");
+        }
+
+        setUser(userData as any as User);
+        navigate('/dashboard');
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     try {
       const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
       if (data.user && data.session) {
-        const { data: userData, error: userError } = await supabase
-          .from('users').select('*').eq('id', data.user.id).single();
-        if (userError) throw userError;
-        setUser(userData);
+        let userData = await db.users.get(data.user.id);
+        if (!userData && navigator.onLine) {
+          try {
+            const { data: uData, error: userError } = await supabase
+              .from('users').select('*').eq('id', data.user.id).single();
+            if (userError) throw userError;
+            if (uData) {
+              userData = uData;
+              await db.users.put(uData);
+            }
+          } catch (e) {
+            console.error('Fetch user error', e);
+          }
+        }
+        if (!userData) throw new Error('User profile not found.');
+
+        setUser(userData as any as User);
         navigate('/dashboard');
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t('auth.loginError'));
+      console.error("Login error:", err);
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
+        setError("Vous êtes hors ligne. Veuillez utiliser le mode 'Connexion Locale (PIN)'.");
+      } else {
+        setError(err instanceof Error ? err.message : t('auth.loginError'));
+      }
     } finally {
       setIsLoading(false);
     }
@@ -156,46 +221,114 @@ export function Login() {
             </div>
           )}
 
+          <div className="mb-6 flex p-1 bg-[var(--bg-panel)] rounded-xl border border-[var(--border)]">
+            <button
+              onClick={() => { setLoginMode('online'); setError(null); }}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${loginMode === 'online'
+                ? 'bg-primary-500 text-white shadow-md'
+                : 'text-[var(--text-secondary)] hover:text-white'
+                }`}
+            >
+              En Ligne (Email)
+            </button>
+            <button
+              onClick={() => { setLoginMode('offline'); setError(null); }}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${loginMode === 'offline'
+                ? 'bg-primary-500 text-white shadow-md'
+                : 'text-[var(--text-secondary)] hover:text-white'
+                }`}
+            >
+              Local (PIN)
+            </button>
+          </div>
+
           {/* Form */}
           <form onSubmit={handleLogin} className="space-y-5">
-            <Input
-              label="Adresse email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@lavage-vida.com"
-              required
-              icon={<Mail className="w-5 h-5" />}
-              disabled={isLoading}
-            />
-            <Input
-              label="Mot de passe"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••"
-              required
-              icon={<Lock className="w-5 h-5" />}
-              disabled={isLoading}
-            />
-
-            <div className="flex items-center justify-between pt-2">
-              <label className="flex items-center gap-2.5 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 rounded border-[var(--border-lg)] bg-[var(--bg-panel)] text-primary-500 focus:ring-primary-500 focus:ring-offset-0 transition-all cursor-pointer"
+            {loginMode === 'online' ? (
+              <>
+                <Input
+                  label="Adresse email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@lavage-vida.com"
+                  required
+                  icon={<Mail className="w-5 h-5" />}
+                  disabled={isLoading}
                 />
-                <span className="text-sm text-[var(--text-secondary)] group-hover:text-white transition-colors">
-                  Se souvenir de moi
-                </span>
-              </label>
-              <button
-                type="button"
-                className="text-sm font-medium text-primary-500 hover:text-primary-400 transition-colors"
-              >
-                Mot de passe oublié?
-              </button>
-            </div>
+                <Input
+                  label="Mot de passe"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••"
+                  required
+                  icon={<Lock className="w-5 h-5" />}
+                  disabled={isLoading}
+                />
+
+                <div className="flex items-center justify-between pt-2">
+                  <label className="flex items-center gap-2.5 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-[var(--border-lg)] bg-[var(--bg-panel)] text-primary-500 focus:ring-primary-500 focus:ring-offset-0 transition-all cursor-pointer"
+                    />
+                    <span className="text-sm text-[var(--text-secondary)] group-hover:text-white transition-colors">
+                      Se souvenir de moi
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-primary-500 hover:text-primary-400 transition-colors"
+                  >
+                    Mot de passe oublié?
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                    Sélectionnez votre profil
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <UserIcon className="w-5 h-5 text-gray-500" />
+                    </div>
+                    <select
+                      value={selectedProfileId || ''}
+                      onChange={(e) => setSelectedProfileId(e.target.value)}
+                      required
+                      className="w-full pl-10 pr-4 py-2 bg-[var(--bg-panel)] border border-[var(--border-lg)] rounded-xl text-white appearance-none focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-shadow"
+                    >
+                      <option value="" disabled>-- Choisir --</option>
+                      {localUsers?.map(user => (
+                        <option key={user.id} value={user.id}>
+                          {user.full_name} ({user.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {(!localUsers || localUsers.length === 0) && (
+                    <p className="text-xs text-warning-500 mt-2">
+                      Aucun profil local trouvé. Veuillez vous connecter en ligne une première fois pour synchroniser les données.
+                    </p>
+                  )}
+                </div>
+
+                <Input
+                  label="Code PIN (Local)"
+                  type="password"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  placeholder="••••"
+                  required
+                  maxLength={6}
+                  icon={<KeyRound className="w-5 h-5" />}
+                  disabled={isLoading || !localUsers?.length}
+                />
+              </>
+            )}
 
             <Button
               type="submit"
@@ -211,25 +344,33 @@ export function Login() {
           {/* Demo creds */}
           <div className="mt-8 p-5 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border)] shadow-[var(--shadow-card)]">
             <p className="text-[10px] font-bold mb-3 text-primary-500 uppercase tracking-widest">
-              Comptes de démonstration
+              Comptes de démonstration ({loginMode === 'online' ? 'Ligne' : 'Local'})
             </p>
             <div className="space-y-2">
-              {[
-                { role: 'Admin', email: 'admin@lavage-vida.com', pass: 'Admin@123456' },
-              ].map((c) => (
-                <div key={c.role} className="flex items-center justify-between group">
-                  <span className="text-xs font-semibold text-[var(--text-secondary)]">
-                    {c.role}: <span className="text-[var(--text-muted)] font-normal">{c.email}</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => { setEmail(c.email); setPassword(c.pass); }}
-                    className="text-[11px] font-bold text-primary-500/70 group-hover:text-primary-400 transition-colors px-2 py-1 rounded bg-primary-500/10"
-                  >
-                    Utiliser →
-                  </button>
-                </div>
-              ))}
+              {loginMode === 'online' ? (
+                // Online Demo
+                [
+                  { role: 'Admin', email: 'admin@lavage-vida.com', pass: 'Admin@123456' },
+                ].map((c) => (
+                  <div key={c.role} className="flex items-center justify-between group">
+                    <span className="text-xs font-semibold text-[var(--text-secondary)]">
+                      {c.role}: <span className="text-[var(--text-muted)] font-normal">{c.email}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => { setEmail(c.email); setPassword(c.pass); }}
+                      className="text-[11px] font-bold text-primary-500/70 group-hover:text-primary-400 transition-colors px-2 py-1 rounded bg-primary-500/10"
+                    >
+                      Utiliser →
+                    </button>
+                  </div>
+                ))
+              ) : (
+                // Offline Demo
+                <p className="text-xs text-[var(--text-muted)]">
+                  Le profil de démonstration hors ligne nécessite que l'administrateur lui ait défini un code PIN au préalable (ex: `1234`).
+                </p>
+              )}
             </div>
           </div>
         </div>

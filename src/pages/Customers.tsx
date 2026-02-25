@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -10,30 +12,18 @@ import type { Customer } from '../types';
 
 export function Customers() {
   const { t } = useTranslation();
-  const [customers, setCustomers] = useState<Customer[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
+  const customersData = useLiveQuery(async () => {
+    const all = await db.customers.toArray();
+    return all.filter(c => c.active !== false).sort((a, b) => a.full_name.localeCompare(b.full_name));
+  });
 
-  const fetchCustomers = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('active', true)
-      .order('full_name');
-
-    if (data && !error) {
-      setCustomers(data);
-    }
-    setIsLoading(false);
-  };
+  const isLoading = customersData === undefined;
+  const customers = customersData || [];
 
   const filteredCustomers = customers.filter((customer) => {
     const query = searchQuery.toLowerCase();
@@ -44,17 +34,10 @@ export function Customers() {
     );
   });
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (customer: Customer) => {
     if (!confirm(t('messages.deleteConfirm'))) return;
 
-    const { error } = await (supabase
-      .from('customers') as any)
-      .update({ active: false })
-      .eq('id', id);
-
-    if (!error) {
-      fetchCustomers();
-    }
+    await queueOperation('customers', 'UPDATE', { ...customer, active: false });
   };
 
   return (
@@ -107,17 +90,17 @@ export function Customers() {
           {filteredCustomers.map((customer) => (
             <CustomerCard
               key={customer.id}
-              customer={customer}
+              customer={customer as any}
               onEdit={(e) => {
                 e.stopPropagation();
-                setEditingCustomer(customer);
+                setEditingCustomer(customer as any);
                 setShowModal(true);
               }}
               onDelete={(e) => {
                 e.stopPropagation();
-                handleDelete(customer.id);
+                handleDelete(customer as any);
               }}
-              onClick={() => setHistoryCustomer(customer)}
+              onClick={() => setHistoryCustomer(customer as any)}
             />
           ))}
         </div>
@@ -130,7 +113,6 @@ export function Customers() {
           onClose={() => {
             setShowModal(false);
             setEditingCustomer(null);
-            fetchCustomers();
           }}
         />
       )}
@@ -273,23 +255,24 @@ function CustomerModal({ customer, onClose }: CustomerModalProps) {
       loyalty_points: customer?.loyalty_points || 0,
     };
 
-    let error;
-    if (customer) {
-      ({ error } = await (supabase
-        .from('customers') as any)
-        .update(data)
-        .eq('id', customer.id));
-    } else {
-      ({ error } = await (supabase
-        .from('customers') as any)
-        .insert([data]));
-    }
-
-    setIsLoading(false);
-    if (!error) {
+    try {
+      if (customer) {
+        await queueOperation('customers', 'UPDATE', { ...customer, ...data, updated_at: new Date().toISOString() });
+      } else {
+        await queueOperation('customers', 'INSERT', {
+          id: crypto.randomUUID(),
+          ...data,
+          active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+      }
       onClose();
-    } else {
+    } catch (error) {
+      console.error(error);
       alert(t('messages.saveError'));
+    } finally {
+      setIsLoading(false);
     }
   };
 

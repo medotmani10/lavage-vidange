@@ -1,41 +1,49 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueueStore } from '../stores/useQueueStore';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { Input } from '../components/Input';
 import { X, Check, Printer } from 'lucide-react';
-import { supabase } from '../lib/supabase';
 import { printTicket } from '../lib/printTicket';
+import { db } from '../lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { queueOperation } from '../lib/sync';
 
 interface AddTicketModalProps {
   onClose: () => void;
 }
 
-interface CustomerOption {
-  id: string;
-  full_name: string;
-  phone: string;
-}
 
-interface VehicleOption {
-  id: string;
-  plate_number: string;
-  brand: string;
-  model: string;
-}
 
 export function AddTicketModal({ onClose }: AddTicketModalProps) {
   const { t } = useTranslation();
   const { createTicket, isLoading } = useQueueStore();
 
-  const [customers, setCustomers] = useState<CustomerOption[]>([]);
-  const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
-
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [priority, setPriority] = useState<'normal' | 'priority' | 'vip'>('normal');
   const [notes, setNotes] = useState('');
+
+  const customers = useLiveQuery(async () => {
+    const all = await db.customers.toArray();
+    return all.filter(c => c.active !== false).map(c => ({
+      id: c.id,
+      full_name: c.full_name,
+      phone: c.phone
+    })).sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }) || [];
+
+  const vehicles = useLiveQuery(async () => {
+    if (!selectedCustomerId) return [];
+    const all = await db.vehicles.where('customer_id').equals(selectedCustomerId).toArray();
+    return all.map(v => ({
+      id: v.id,
+      plate_number: v.plate_number,
+      brand: v.brand,
+      model: v.model
+    })).sort((a, b) => a.plate_number.localeCompare(b.plate_number));
+  }, [selectedCustomerId]) || [];
 
   // Quick Add State
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
@@ -48,78 +56,40 @@ export function AddTicketModal({ onClose }: AddTicketModalProps) {
   const [newVehicleModel, setNewVehicleModel] = useState('');
   const [newVehicleYear, setNewVehicleYear] = useState(new Date().getFullYear().toString());
 
-  const fetchCustomers = async () => {
-    const { data } = await supabase
-      .from('customers')
-      .select('id, full_name, phone')
-      .eq('active', true)
-      .order('full_name');
-    if (data) setCustomers(data);
-  };
 
-  const fetchVehicles = async () => {
-    if (!selectedCustomerId) {
-      setVehicles([]);
-      return;
-    }
-    const { data } = await supabase
-      .from('vehicles')
-      .select('id, plate_number, brand, model')
-      .eq('customer_id', selectedCustomerId)
-      .order('plate_number');
-    if (data) setVehicles(data);
-  };
-
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  useEffect(() => {
-    fetchVehicles();
-  }, [selectedCustomerId]);
 
   const handleQuickAddCustomer = async (e?: React.MouseEvent) => {
     if (e) e.preventDefault();
     if (!newCustomerName) return;
 
     if (newCustomerPhone) {
-      const { data: existingCustomerData } = await supabase
-        .from('customers')
-        .select('id, full_name, phone')
-        .eq('phone', newCustomerPhone)
-        .eq('active', true)
-        .maybeSingle();
-
-      const existingCustomer = existingCustomerData as any;
+      const existingCustomer = customers.find(c => c.phone === newCustomerPhone);
 
       if (existingCustomer) {
         alert(`Un client avec ce numéro de téléphone existe déjà: ${existingCustomer.full_name}`);
-        // Optionally select the existing customer 
-        // setSelectedCustomerId(existingCustomer.id);
-        // setIsAddingCustomer(false);
         return;
       }
     }
 
-    const { data, error } = await supabase
-      .from('customers')
-      .insert([{ full_name: newCustomerName, phone: newCustomerPhone || '' }] as any)
-      .select()
-      .single();
+    const newId = crypto.randomUUID();
+    const newCustomer = {
+      id: newId,
+      full_name: newCustomerName,
+      phone: newCustomerPhone || '',
+      active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
 
-    if (error) {
-      console.error('Customer insert error:', error);
-      alert('Erreur lors de l\'ajout du client: ' + error.message);
-      return;
-    }
-
-    if (!error && (data as any)) {
-      const newCustomer = data as any;
-      setCustomers((prev) => [...prev, newCustomer].sort((a, b) => a.full_name.localeCompare(b.full_name)));
-      setSelectedCustomerId(newCustomer.id);
+    try {
+      await queueOperation('customers', 'INSERT', newCustomer as any);
+      setSelectedCustomerId(newId);
       setIsAddingCustomer(false);
       setNewCustomerName('');
       setNewCustomerPhone('');
+    } catch (error: any) {
+      console.error('Customer insert error:', error);
+      alert('Erreur lors de l\'ajout du client: ' + error.message);
     }
   };
 
@@ -127,33 +97,29 @@ export function AddTicketModal({ onClose }: AddTicketModalProps) {
     if (e) e.preventDefault();
     if (!newVehiclePlate || !selectedCustomerId) return;
 
-    const { data, error } = await supabase
-      .from('vehicles')
-      .insert([{
-        customer_id: selectedCustomerId,
-        plate_number: newVehiclePlate,
-        brand: newVehicleBrand || 'Inconnu',
-        model: newVehicleModel || 'Inconnu',
-        year: parseInt(newVehicleYear) || new Date().getFullYear()
-      }] as any)
-      .select()
-      .single();
+    const newId = crypto.randomUUID();
+    const newVehicle = {
+      id: newId,
+      customer_id: selectedCustomerId,
+      plate_number: newVehiclePlate,
+      brand: newVehicleBrand || 'Inconnu',
+      model: newVehicleModel || 'Inconnu',
+      year: parseInt(newVehicleYear) || new Date().getFullYear(),
+      odometer: 0,
+      created_at: new Date().toISOString()
+    };
 
-    if (error) {
-      console.error('Vehicle insert error:', error);
-      alert('Erreur lors de l\'ajout du véhicule: ' + error.message);
-      return;
-    }
-
-    if (!error && (data as any)) {
-      const newVehicle = data as any;
-      setVehicles((prev) => [...prev, newVehicle].sort((a, b) => a.plate_number.localeCompare(b.plate_number)));
-      setSelectedVehicleId(newVehicle.id);
+    try {
+      await queueOperation('vehicles', 'INSERT', newVehicle as any);
+      setSelectedVehicleId(newId);
       setIsAddingVehicle(false);
       setNewVehiclePlate('');
       setNewVehicleBrand('');
       setNewVehicleModel('');
       setNewVehicleYear(new Date().getFullYear().toString());
+    } catch (error: any) {
+      console.error('Vehicle insert error:', error);
+      alert('Erreur lors de l\'ajout du véhicule: ' + error.message);
     }
   };
 
@@ -177,14 +143,10 @@ export function AddTicketModal({ onClose }: AddTicketModalProps) {
         const customer = customers.find(c => c.id === selectedCustomerId);
         const vehicle = vehicles.find(v => v.id === selectedVehicleId);
 
-        // Count cars ahead
-        const { count } = await supabase
-          .from('queue_tickets')
-          .select('*', { count: 'exact', head: true })
-          .in('status', ['pending', 'in_progress'])
-          .lt('created_at', ticket.created_at);
-
-        const carsAhead = count || 0;
+        // Count cars ahead locally
+        const carsAhead = await db.queue_tickets
+          .filter(t => (t.status === 'pending' || t.status === 'in_progress') && t.created_at < ticket.created_at)
+          .count();
 
         // Use a slight delay to ensure the modal closes smoothly before print blocks the thread
         setTimeout(() => {

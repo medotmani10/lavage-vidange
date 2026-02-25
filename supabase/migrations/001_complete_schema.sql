@@ -146,10 +146,8 @@ CREATE INDEX idx_vehicles_plate       ON public.vehicles(plate_number);
 -- 4.4 SERVICES
 CREATE TABLE public.services (
   id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name_fr          VARCHAR(255) NOT NULL,
-  name_ar          VARCHAR(255) NOT NULL,
-  description_fr   TEXT,
-  description_ar   TEXT,
+  name             VARCHAR(255) NOT NULL,
+  description      TEXT,
   price            DECIMAL(10,2) NOT NULL DEFAULT 0,
   cost             DECIMAL(10,2) DEFAULT 0,
   duration_minutes INTEGER DEFAULT 30,
@@ -183,8 +181,7 @@ CREATE INDEX idx_suppliers_active ON public.suppliers(active);
 -- 4.6 PRODUCTS
 CREATE TABLE public.products (
   id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name_fr        VARCHAR(255) NOT NULL,
-  name_ar        VARCHAR(255) NOT NULL,
+  name           VARCHAR(255) NOT NULL,
   category       product_category NOT NULL DEFAULT 'other',
   sku            VARCHAR(100) UNIQUE NOT NULL,
   barcode        VARCHAR(100),

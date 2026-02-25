@@ -31,8 +31,10 @@ export interface Database {
           full_name: string
           role: UserRole
           phone: string | null
+          pin_code: string | null
           avatar_url: string | null
           active: boolean
+          allowed_pages: string[] | null
           created_at: string
           updated_at: string
         }
@@ -42,8 +44,10 @@ export interface Database {
           full_name: string
           role: UserRole
           phone?: string | null
+          pin_code?: string | null
           avatar_url?: string | null
           active?: boolean
+          allowed_pages?: string[] | null
           created_at?: string
           updated_at?: string
         }
@@ -53,8 +57,10 @@ export interface Database {
           full_name?: string
           role?: UserRole
           phone?: string | null
+          pin_code?: string | null
           avatar_url?: string | null
           active?: boolean
+          allowed_pages?: string[] | null
           created_at?: string
           updated_at?: string
         }
@@ -150,10 +156,8 @@ export interface Database {
       services: {
         Row: {
           id: string
-          name_fr: string
-          name_ar: string
-          description_fr: string | null
-          description_ar: string | null
+          name: string
+          description: string | null
           price: number
           cost: number
           duration_minutes: number
@@ -165,10 +169,8 @@ export interface Database {
         }
         Insert: {
           id?: string
-          name_fr: string
-          name_ar: string
-          description_fr?: string | null
-          description_ar?: string | null
+          name: string
+          description: string | null
           price?: number
           cost?: number
           duration_minutes?: number
@@ -180,10 +182,8 @@ export interface Database {
         }
         Update: {
           id?: string
-          name_fr?: string
-          name_ar?: string
-          description_fr?: string | null
-          description_ar?: string | null
+          name: string
+          description: string | null
           price?: number
           cost?: number
           duration_minutes?: number
@@ -197,8 +197,7 @@ export interface Database {
       products: {
         Row: {
           id: string
-          name_fr: string
-          name_ar: string
+          name: string
           category: ProductCategory
           sku: string
           barcode: string | null
@@ -219,8 +218,7 @@ export interface Database {
         }
         Insert: {
           id?: string
-          name_fr: string
-          name_ar: string
+          name: string
           category?: ProductCategory
           sku: string
           barcode?: string | null
@@ -241,8 +239,7 @@ export interface Database {
         }
         Update: {
           id?: string
-          name_fr?: string
-          name_ar?: string
+          name: string
           category?: ProductCategory
           sku?: string
           barcode?: string | null
@@ -313,6 +310,7 @@ export interface Database {
         Row: {
           id: string
           user_id: string | null
+          full_name: string
           position: string
           phone: string
           emergency_contact: string | null
@@ -329,6 +327,7 @@ export interface Database {
         Insert: {
           id?: string
           user_id?: string | null
+          full_name: string
           position: string
           phone: string
           emergency_contact?: string | null
@@ -345,6 +344,7 @@ export interface Database {
         Update: {
           id?: string
           user_id?: string | null
+          full_name?: string
           position?: string
           phone?: string
           emergency_contact?: string | null
@@ -704,8 +704,7 @@ export interface Database {
           id: string
           type: TransactionType
           amount: number
-          description_fr: string
-          description_ar: string
+          description: string
           reference_type: string | null
           reference_id: string | null
           category: string | null
@@ -716,8 +715,7 @@ export interface Database {
           id?: string
           type: TransactionType
           amount: number
-          description_fr: string
-          description_ar: string
+          description: string
           reference_type?: string | null
           reference_id?: string | null
           category?: string | null
@@ -728,8 +726,7 @@ export interface Database {
           id?: string
           type?: TransactionType
           amount?: number
-          description_fr?: string
-          description_ar?: string
+          description: string
           reference_type?: string | null
           reference_id?: string | null
           category?: string | null
@@ -839,8 +836,7 @@ export interface Database {
       view_low_stock_products: {
         Row: {
           id: string | null
-          name_fr: string | null
-          name_ar: string | null
+          name: string | null
           category: ProductCategory | null
           sku: string | null
           stock_quantity: number | null

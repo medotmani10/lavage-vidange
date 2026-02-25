@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePOSStore } from '../stores/usePOSStore';
 import { useQueueStore } from '../stores/useQueueStore';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { X, CheckCircle, Wallet, CreditCard, Clock } from 'lucide-react';
@@ -14,7 +15,7 @@ interface PaymentModalProps {
 
 export function PaymentModal({ ticketId, onClose }: PaymentModalProps) {
   const { t } = useTranslation();
-  const { total, items, customerId, clearCart } = usePOSStore();
+  const { total, items, customerId, employeeId, clearCart } = usePOSStore();
   const { fetchTickets } = useQueueStore();
 
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit'>('cash');
@@ -39,91 +40,164 @@ export function PaymentModal({ ticketId, onClose }: PaymentModalProps) {
     setIsProcessing(true);
 
     try {
-      // 1. Update queue_tickets to mark as completed
-      const { error: ticketError } = await (supabase.from('queue_tickets') as any)
-        .update({
+      // 1. Update queue_tickets
+      const currentTicket = await db.queue_tickets.get(ticketId);
+      if (currentTicket) {
+        await queueOperation('queue_tickets', 'UPDATE', {
+          ...currentTicket,
           status: 'completed',
           payment_method: paymentMethod,
           paid_amount: paymentMethod === 'credit' ? 0 : total,
           completed_at: new Date().toISOString(),
-        })
-        .eq('id', ticketId);
+        });
+      }
 
-      if (ticketError) throw ticketError;
-
-      // 2. Fetch current customer balance
-      const { data: cust } = await supabase.from('customers').select('current_balance').eq('id', customerId).single();
-      const currentBalance = (cust as any)?.current_balance || 0;
+      // 2. Fetch current customer
+      const currentCust = await db.customers.get(customerId);
+      const currentBalance = currentCust?.current_balance || 0;
 
       // 3. Handle Payment or Debt logic
       if (paymentMethod === 'credit') {
-        // Enregistrer la dette
-        await (supabase.from('debts') as any).insert([{
+        const debtId = crypto.randomUUID();
+        await queueOperation('debts', 'INSERT', {
+          id: debtId,
           customer_id: customerId,
           ticket_id: ticketId,
           original_amount: total,
+          paid_amount: 0,
           remaining_amount: total,
           status: 'pending',
-          due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-        }]);
+          due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
 
-        // Ajouter la dette au solde actuel
-        await (supabase.from('customers') as any).update({
-          current_balance: currentBalance + total
-        }).eq('id', customerId);
-
+        if (currentCust) {
+          await queueOperation('customers', 'UPDATE', {
+            ...currentCust,
+            current_balance: currentBalance + total,
+            updated_at: new Date().toISOString()
+          });
+        }
       } else {
-        // Compenser le trigger automatisé (le trigger va déduire ce montant, donc on l'ajoute d'abord)
-        await (supabase.from('customers') as any).update({
-          current_balance: currentBalance + total
-        }).eq('id', customerId);
+        if (currentCust) {
+          await queueOperation('customers', 'UPDATE', {
+            ...currentCust,
+            current_balance: currentBalance + total,
+            updated_at: new Date().toISOString()
+          });
+        }
 
-        // Enregistrer le paiement (Ceci déclenchera la déduction du solde et l'ajout de points de fidélité)
-        await (supabase.from('payments') as any).insert([{
+        const paymentId = crypto.randomUUID();
+        await queueOperation('payments', 'INSERT', {
+          id: paymentId,
           ticket_id: ticketId,
           customer_id: customerId,
           amount: total,
           payment_method: paymentMethod,
           reference_number: referenceNumber || null,
-          notes: notes
-        }]);
+          notes: notes,
+          created_at: new Date().toISOString()
+        });
 
-        // Ajouter la transaction financière comme revenu
-        await (supabase.from('financial_transactions') as any).insert([{
+        const txId = crypto.randomUUID();
+        await queueOperation('financial_transactions', 'INSERT', {
+          id: txId,
           type: 'revenue',
           amount: total,
-          description_fr: `Paiement Ticket #${ticketId.slice(0, 8)}`,
-          description_ar: `دفع التذكرة`,
+          description: `Paiement Ticket #${ticketId.slice(0, 8)}`,
           reference_type: 'ticket',
           reference_id: ticketId,
           category: 'sales',
-        }]);
+          created_at: new Date().toISOString(),
+        });
       }
 
-      // 4. Record ticket services & products for distinct reporting
+      // 4. Record ticket services & products and calculate commissions
       const services = items.filter(i => i.type === 'service');
       const products = items.filter(i => i.type === 'product');
+      let totalCommissionsForTicket = 0;
+
+      const employee = employeeId ? await db.employees.get(employeeId) : null;
 
       if (services.length > 0) {
-        const sI = services.map(s => ({
-          ticket_id: ticketId,
-          service_id: s.id,
-          quantity: s.quantity,
-          unit_price: s.price,
-          total_price: s.subtotal,
-        }));
-        await (supabase.from('ticket_services') as any).insert(sI);
+        for (const s of services) {
+          await queueOperation('ticket_services', 'INSERT', {
+            id: crypto.randomUUID(),
+            ticket_id: ticketId,
+            service_id: s.id,
+            quantity: s.quantity,
+            unit_price: s.price,
+            total_price: s.subtotal,
+            employee_id: employeeId || null,
+            created_at: new Date().toISOString()
+          });
+
+          // Calculate commission if an employee is assigned
+          if (employee) {
+            const serviceData = await db.services.get(s.id);
+            let commissionAmount = 0;
+            let rateApplied = 0;
+            let method = 'percentage';
+
+            if (serviceData) {
+              if (serviceData.commission_fixed > 0) {
+                commissionAmount = serviceData.commission_fixed * s.quantity;
+                method = 'fixed';
+                rateApplied = serviceData.commission_fixed;
+              } else if (serviceData.commission_rate > 0) {
+                commissionAmount = (s.subtotal * serviceData.commission_rate) / 100;
+                rateApplied = serviceData.commission_rate;
+              } else if (employee.commission_rate > 0) {
+                commissionAmount = (s.subtotal * employee.commission_rate) / 100;
+                rateApplied = employee.commission_rate;
+              }
+            }
+
+            if (commissionAmount > 0) {
+              totalCommissionsForTicket += commissionAmount;
+
+              await queueOperation('commissions', 'INSERT', {
+                id: crypto.randomUUID(),
+                employee_id: employee.id,
+                ticket_id: ticketId,
+                service_id: s.id,
+                amount: commissionAmount,
+                calculation_method: method,
+                rate_applied: rateApplied,
+                paid: false,
+                paid_at: null,
+                paid_in_batch: null,
+                notes: `Commission for ${s.name} (Qty: ${s.quantity})`,
+                created_at: new Date().toISOString()
+              });
+            }
+          }
+        }
+      }
+
+      // 5. Update Employee commission balances
+      if (employee && totalCommissionsForTicket > 0) {
+        await queueOperation('employees', 'UPDATE', {
+          ...employee,
+          total_commissions: (employee.total_commissions || 0) + totalCommissionsForTicket,
+          pending_commissions: (employee.pending_commissions || 0) + totalCommissionsForTicket,
+          updated_at: new Date().toISOString()
+        });
       }
 
       if (products.length > 0) {
-        const pI = products.map(p => ({
-          ticket_id: ticketId,
-          product_id: p.id,
-          quantity: p.quantity,
-          unit_price: p.price,
-          total_price: p.subtotal,
-        }));
-        await (supabase.from('ticket_products') as any).insert(pI);
+        for (const p of products) {
+          await queueOperation('ticket_products', 'INSERT', {
+            id: crypto.randomUUID(),
+            ticket_id: ticketId,
+            product_id: p.id,
+            quantity: p.quantity,
+            unit_price: p.price,
+            total_price: p.subtotal,
+            created_at: new Date().toISOString()
+          });
+        }
       }
 
       // Refresh Queue Data

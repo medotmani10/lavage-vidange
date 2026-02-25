@@ -1,50 +1,44 @@
-import { useState, useEffect } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useState } from 'react';
+
 import { usePOSStore } from '../stores/usePOSStore';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Search, Clock, PlusCircle } from 'lucide-react';
 import { Input } from '../components/Input';
 
 interface Service {
   id: string;
-  name_fr: string;
-  name_ar: string;
+  name: string;
   price: number;
   duration_minutes: number;
   commission_rate: number;
-  category: 'lavage' | 'vidange' | 'pneumatique';
 }
 
 export function ServicesPanel() {
-  const { t, i18n } = useTranslation();
+
   const { addItem } = usePOSStore();
 
-  const [services, setServices] = useState<Service[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'lavage' | 'vidange' | 'pneumatique'>('lavage');
 
-  useEffect(() => {
-    const fetchServices = async () => {
-      const { data, error } = await supabase.from('services').select('*').eq('active', true).order('name_fr');
-      if (data && !error) setServices(data);
-      setIsLoading(false);
-    };
-    fetchServices();
-  }, []);
+  const services = useLiveQuery(async () => {
+    const all = await db.services.toArray();
+    return all.filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name));
+  });
 
-  const filteredServices = services.filter((service) => {
-    const matchesTab = service.category === activeTab;
-    const name = i18n.language === 'ar' ? service.name_ar : service.name_fr;
+  const isLoading = services === undefined;
+
+  const filteredServices = (services || []).filter((service: any) => {
+    const name = service.name;
     const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesTab && matchesSearch;
+    return matchesSearch;
   });
 
   const handleAddService = (service: Service) => {
     addItem({
       id: service.id,
       type: 'service',
-      name: i18n.language === 'ar' ? service.name_ar : service.name_fr,
+      name: service.name,
       price: service.price,
       quantity: 1,
     });
@@ -100,7 +94,7 @@ export function ServicesPanel() {
               >
                 <div className="flex justify-between items-start mb-2 w-full">
                   <h3 className="font-bold text-[13px] text-white group-hover:text-primary-400 leading-tight">
-                    {i18n.language === 'ar' ? service.name_ar : service.name_fr}
+                    {service.name}
                   </h3>
                   <PlusCircle className="w-4 h-4 text-primary-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2" />
                 </div>

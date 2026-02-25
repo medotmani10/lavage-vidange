@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/db';
+import { queueOperation } from '../lib/sync';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -9,8 +11,7 @@ import { Plus, Search, Package, Edit2, Trash2, AlertTriangle, TrendingUp, X } fr
 
 interface Product {
   id: string;
-  name_fr: string;
-  name_ar: string;
+  name: string;
   category: string;
   sku: string;
   stock_quantity: number;
@@ -32,64 +33,29 @@ interface Supplier {
 }
 
 export function Inventory() {
-  const { t, i18n } = useTranslation();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [stockFilter, setStockFilter] = useState('all');
-  const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
-  const categories = [
-    { value: 'all', label: t('inventory.categories.all') },
-    { value: 'tire', label: t('inventory.categories.tire') },
-    { value: 'oil', label: t('inventory.categories.oil') },
-    { value: 'accessory', label: t('inventory.categories.accessory') },
-    { value: 'other', label: t('inventory.categories.other') },
-  ];
+  const productsData = useLiveQuery(async () => {
+    const all = await db.products.toArray();
+    return all.filter(p => (p as any).active !== false).sort((a, b) => a.name.localeCompare(b.name));
+  });
 
-  const stockFilters = [
-    { value: 'all', label: t('inventory.stockFilters.all') },
-    { value: 'low', label: t('inventory.stockFilters.low') },
-    { value: 'out', label: t('inventory.stockFilters.out') },
-    { value: 'inStock', label: t('inventory.stockFilters.inStock') },
-  ];
+  const suppliersData = useLiveQuery(async () => {
+    const all = await db.suppliers.toArray();
+    return all.filter(s => s.active !== false).sort((a, b) => a.company_name.localeCompare(b.company_name));
+  });
 
-  useEffect(() => {
-    fetchProducts();
-    fetchSuppliers();
-  }, []);
-
-  const fetchProducts = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('active', true)
-      .order('name_fr');
-
-    if (data && !error) {
-      setProducts(data);
-    }
-    setIsLoading(false);
-  };
-
-  const fetchSuppliers = async () => {
-    const { data } = await supabase
-      .from('suppliers')
-      .select('id, company_name')
-      .eq('active', true)
-      .order('company_name');
-
-    if (data) {
-      setSuppliers(data);
-    }
-  };
+  const isLoading = productsData === undefined || suppliersData === undefined;
+  const products = productsData as Product[] || [];
+  const suppliers = suppliersData as Supplier[] || [];
 
   const filteredProducts = products.filter((product) => {
-    const name = i18n.language === 'ar' ? product.name_ar : product.name_fr;
+    const name = product.name;
     const matchesSearch =
       name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       product.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -109,16 +75,10 @@ export function Inventory() {
     return matchesSearch && matchesCategory && matchesStock;
   });
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (product: Product) => {
     if (!confirm(t('messages.deleteConfirm'))) return;
 
-    const { error } = await (supabase.from('products') as any)
-      .update({ active: false })
-      .eq('id', id);
-
-    if (!error) {
-      fetchProducts();
-    }
+    await queueOperation('products', 'UPDATE', { ...product, active: false });
   };
 
   const lowStockCount = products.filter(p => p.stock_quantity <= p.min_stock && p.stock_quantity > 0).length;
@@ -199,14 +159,25 @@ export function Inventory() {
         <Select
           value={selectedCategory}
           onChange={(e) => setSelectedCategory(e.target.value)}
-          options={categories}
+          options={[
+            { value: 'all', label: t('inventory.categories.all') },
+            { value: 'tire', label: t('inventory.categories.tire') },
+            { value: 'oil', label: t('inventory.categories.oil') },
+            { value: 'accessory', label: t('inventory.categories.accessory') },
+            { value: 'other', label: t('inventory.categories.other') },
+          ]}
           className="min-w-[180px] bg-[var(--bg-base)] border-none"
         />
 
         <Select
           value={stockFilter}
           onChange={(e) => setStockFilter(e.target.value)}
-          options={stockFilters}
+          options={[
+            { value: 'all', label: t('inventory.stockFilters.all') },
+            { value: 'low', label: t('inventory.stockFilters.low') },
+            { value: 'out', label: t('inventory.stockFilters.out') },
+            { value: 'inStock', label: t('inventory.stockFilters.inStock') },
+          ]}
           className="min-w-[180px] bg-[var(--bg-base)] border-none"
         />
       </Card>
@@ -245,7 +216,7 @@ export function Inventory() {
                     <td className="px-6 py-4">
                       <div>
                         <p className="font-bold text-white text-sm">
-                          {i18n.language === 'ar' ? product.name_ar : product.name_fr}
+                          {product.name}
                         </p>
                         {product.brand && (
                           <p className="text-xs text-[var(--text-secondary)] mt-0.5">{product.brand}</p>
@@ -265,8 +236,8 @@ export function Inventory() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <span className={`font-bold text-sm ${product.stock_quantity === 0 ? 'text-danger-400' :
-                            product.stock_quantity <= product.min_stock ? 'text-warning-400' :
-                              'text-success-400'
+                          product.stock_quantity <= product.min_stock ? 'text-warning-400' :
+                            'text-success-400'
                           }`}>
                           {product.stock_quantity}
                         </span>
@@ -298,7 +269,7 @@ export function Inventory() {
                           <Edit2 className="w-4 h-4 text-primary-400" />
                         </button>
                         <button
-                          onClick={() => handleDelete(product.id)}
+                          onClick={() => handleDelete(product)}
                           className="p-2 hover:bg-danger-500/10 rounded-lg transition-colors border border-transparent hover:border-danger-500/30"
                         >
                           <Trash2 className="w-4 h-4 text-danger-400" />
@@ -321,7 +292,6 @@ export function Inventory() {
           onClose={() => {
             setShowModal(false);
             setEditingProduct(null);
-            fetchProducts();
           }}
         />
       )}
@@ -338,8 +308,7 @@ interface ProductModalProps {
 function ProductModal({ product, suppliers, onClose }: ProductModalProps) {
   const { t } = useTranslation();
   const [formData, setFormData] = useState({
-    name_fr: product?.name_fr || '',
-    name_ar: product?.name_ar || '',
+    name: product?.name || '',
     category: product?.category || 'other',
     sku: product?.sku || '',
     barcode: '',
@@ -362,8 +331,7 @@ function ProductModal({ product, suppliers, onClose }: ProductModalProps) {
     setIsLoading(true);
 
     const data: any = {
-      name_fr: formData.name_fr,
-      name_ar: formData.name_ar,
+      name: formData.name,
       category: formData.category,
       sku: formData.sku,
       stock_quantity: parseInt(formData.stock_quantity) || 0,
@@ -385,22 +353,24 @@ function ProductModal({ product, suppliers, onClose }: ProductModalProps) {
       data.oil_volume = parseFloat(formData.oil_volume) || null;
     }
 
-    let error;
-    if (product) {
-      ({ error } = await (supabase.from('products') as any)
-        .update(data)
-        .eq('id', product.id));
-    } else {
-      data.active = true;
-      ({ error } = await (supabase.from('products') as any)
-        .insert([data]));
-    }
-
-    setIsLoading(false);
-    if (!error) {
+    try {
+      if (product) {
+        await queueOperation('products', 'UPDATE', { ...product, ...data, updated_at: new Date().toISOString() });
+      } else {
+        await queueOperation('products', 'INSERT', {
+          id: crypto.randomUUID(),
+          ...data,
+          active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+      }
       onClose();
-    } else {
+    } catch (error) {
+      console.error(error);
       alert(t('messages.saveError'));
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -433,20 +403,12 @@ function ProductModal({ product, suppliers, onClose }: ProductModalProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-6 overflow-y-auto scrollbar-thin scrollbar-thumb-gray">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <Input
-              label={`${t('inventory.productName')} (FR)`}
-              value={formData.name_fr}
-              onChange={(e) => setFormData({ ...formData, name_fr: e.target.value })}
+              label={t('inventory.productName')}
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               required
-            />
-            <Input
-              label={`${t('inventory.productName')} (AR)`}
-              value={formData.name_ar}
-              onChange={(e) => setFormData({ ...formData, name_ar: e.target.value })}
-              required
-              className="text-right"
-              dir="rtl"
             />
           </div>
 
