@@ -20,6 +20,8 @@ export function KioskPage() {
     const [step, setStep] = useState<'home' | 'form' | 'ticket'>('home');
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
+    const [plate, setPlate] = useState('');
+    const [brand, setBrand] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [myTicket, setMyTicket] = useState<{ number: string; position: number } | null>(null);
     const [now, setNow] = useState(new Date());
@@ -72,22 +74,53 @@ export function KioskPage() {
     const pending = activeTickets.filter(t => t.status === 'pending');
 
     const handleGetTicket = useCallback(async () => {
-        if (!name.trim()) return;
+        if (!name.trim() || !plate.trim() || !brand.trim()) return;
         setIsSubmitting(true);
         try {
             // Upsert customer
             let customerId: string;
+            let vehicleId: string;
+
             const phone_ = phone.trim() || `KIOSK-${Date.now()}`;
-            const { data: existing } = await supabase
+            const { data: existing, error: errExisting } = await supabase
                 .from('customers')
                 .select('id')
                 .eq('phone', phone_)
                 .maybeSingle();
 
+            if (errExisting) throw errExisting;
+
             if (existing) {
                 customerId = existing.id;
+
+                // Get or create vehicle
+                const { data: existingVehicle, error: errVehicles } = await supabase
+                    .from('vehicles')
+                    .select('id')
+                    .eq('customer_id', customerId)
+                    .maybeSingle();
+
+                if (errVehicles) throw errVehicles;
+
+                if (existingVehicle) {
+                    vehicleId = existingVehicle.id;
+                } else {
+                    const { data: newVeh, error: vehErr } = await supabase
+                        .from('vehicles')
+                        .insert({
+                            customer_id: customerId,
+                            plate_number: plate.trim() || `KIOSK-${Date.now().toString().slice(-6)}`,
+                            brand: brand.trim() || 'Inconnu',
+                            model: 'Inconnu',
+                            year: new Date().getFullYear(),
+                        })
+                        .select('id')
+                        .single();
+                    if (vehErr) throw vehErr;
+                    vehicleId = newVeh!.id;
+                }
             } else {
-                const { data: newCust } = await supabase
+                const { data: newCust, error: custErr } = await supabase
                     .from('customers')
                     .insert({
                         full_name: name.trim(),
@@ -99,17 +132,32 @@ export function KioskPage() {
                     })
                     .select('id')
                     .single();
+                if (custErr) throw custErr;
                 customerId = newCust!.id;
+
+                const { data: newVeh, error: vehErr } = await supabase
+                    .from('vehicles')
+                    .insert({
+                        customer_id: customerId,
+                        plate_number: plate.trim() || `KIOSK-${Date.now().toString().slice(-6)}`,
+                        brand: brand.trim() || 'Inconnu',
+                        model: 'Inconnu',
+                        year: new Date().getFullYear(),
+                    })
+                    .select('id')
+                    .single();
+                if (vehErr) throw vehErr;
+                vehicleId = newVeh!.id;
             }
 
             // Generate ticket number
             const ticketNumber = `K${String(pending.length + 1).padStart(3, '0')}`;
 
             // Insert ticket
-            await supabase.from('queue_tickets').insert({
+            const { error: ticketErr } = await supabase.from('queue_tickets').insert({
                 ticket_number: ticketNumber,
                 customer_id: customerId,
-                vehicle_id: customerId, // placeholder
+                vehicle_id: vehicleId, // properly referenced
                 status: 'pending',
                 priority: 'normal',
                 subtotal: 0,
@@ -122,6 +170,7 @@ export function KioskPage() {
                 service_ids: [],
                 product_items: [],
             });
+            if (ticketErr) throw ticketErr;
 
             setMyTicket({ number: ticketNumber, position: pending.length + 1 });
             setStep('ticket');
@@ -130,7 +179,7 @@ export function KioskPage() {
         } finally {
             setIsSubmitting(false);
         }
-    }, [name, phone, pending]);
+    }, [name, phone, plate, brand, pending]);
 
     return (
         <div style={{ minHeight: '100vh', background: '#0a0a0f', color: '#fff', fontFamily: "'Inter',sans-serif" }}>
@@ -252,7 +301,7 @@ export function KioskPage() {
 
                         {step === 'form' && (
                             <Card style={{ width: '100%', maxWidth: 440, padding: 32 }} className="fade-in">
-                                <Field label="Votre Prénom" icon={<User size={13} />}>
+                                <Field label="Votre Prénom*" icon={<User size={13} />}>
                                     <input
                                         type="text" value={name} onChange={e => setName(e.target.value)}
                                         placeholder="Ex: Mohamed"
@@ -263,6 +312,20 @@ export function KioskPage() {
                                     <input
                                         type="tel" value={phone} onChange={e => setPhone(e.target.value)}
                                         placeholder="05xxxxxxxx"
+                                        style={inputStyle}
+                                    />
+                                </Field>
+                                <Field label="Marque du véhicule*" icon={<Car size={13} />} style={{ marginTop: 16 }}>
+                                    <input
+                                        type="text" value={brand} onChange={e => setBrand(e.target.value)}
+                                        placeholder="Ex: Renault, Peugeot, Hyundai"
+                                        style={inputStyle}
+                                    />
+                                </Field>
+                                <Field label="Matricule*" icon={<Hash size={13} />} style={{ marginTop: 16 }}>
+                                    <input
+                                        type="text" value={plate} onChange={e => setPlate(e.target.value)}
+                                        placeholder="Ex: 12345 120 16"
                                         style={inputStyle}
                                     />
                                 </Field>
@@ -283,8 +346,8 @@ export function KioskPage() {
                                     </button>
                                     <button
                                         onClick={handleGetTicket}
-                                        disabled={!name.trim() || isSubmitting}
-                                        style={{ flex: 2, padding: '12px', borderRadius: 12, background: 'linear-gradient(90deg,#f97316,#f59e0b)', color: '#fff', fontWeight: 900, fontSize: 14, cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: (!name.trim() || isSubmitting) ? .5 : 1 }}
+                                        disabled={!name.trim() || !plate.trim() || !brand.trim() || isSubmitting}
+                                        style={{ flex: 2, padding: '12px', borderRadius: 12, background: 'linear-gradient(90deg,#f97316,#f59e0b)', color: '#fff', fontWeight: 900, fontSize: 14, cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: (!name.trim() || !plate.trim() || !brand.trim() || isSubmitting) ? .5 : 1 }}
                                     >
                                         {isSubmitting ? <RefreshCw size={16} className="animate-spin" /> : <><TicketIcon size={16} /> Confirmer</>}
                                     </button>
@@ -306,7 +369,7 @@ export function KioskPage() {
                                     <Hash size={12} />
                                     <span>Surveillez le numéro sur l'écran du moniteur</span>
                                 </div>
-                                <button onClick={() => { setStep('home'); setMyTicket(null); setName(''); setPhone(''); }} style={{ marginTop: 24, background: 'none', border: 'none', color: 'rgba(255,255,255,.3)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                                <button onClick={() => { setStep('home'); setMyTicket(null); setName(''); setPhone(''); setPlate(''); setBrand(''); }} style={{ marginTop: 24, background: 'none', border: 'none', color: 'rgba(255,255,255,.3)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                                     Nouveau ticket
                                 </button>
                             </Card>
