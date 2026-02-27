@@ -288,45 +288,17 @@ export function KioskPage() {
         if (!name.trim() || !plate.trim() || !brand.trim()) return;
         setIsSubmitting(true);
         try {
-            const phone_ = phone.trim() || `KIOSK-${Date.now()}`;
+            const { data: ticketNumber, error: rpcError } = await supabase.rpc('kiosk_create_ticket', {
+                p_name: name.trim(),
+                p_phone: phone.trim() || `KIOSK-${Date.now()}`,
+                p_plate: plate.trim(),
+                p_brand: brand.trim()
+            });
 
-            const { data: existing, error: errExisting } = await supabase.from('customers').select('id').eq('phone', phone_).maybeSingle();
-            if (errExisting) throw errExisting;
+            if (rpcError) throw rpcError;
+            if (!ticketNumber) throw new Error('Ticket creation failed — no number returned from secure RPC');
 
-            let customerId: string;
-            let vehicleId: string;
-
-            if (existing) {
-                customerId = existing.id;
-                const { data: ev } = await supabase.from('vehicles').select('id').eq('customer_id', customerId).maybeSingle();
-                if (ev) {
-                    vehicleId = ev.id;
-                } else {
-                    const { data: nv, error: ve } = await supabase.from('vehicles').insert({ customer_id: customerId, plate_number: plate.trim(), brand: brand.trim(), model: 'Inconnu', year: new Date().getFullYear() }).select('id').maybeSingle();
-                    if (ve) throw ve;
-                    if (!nv) throw new Error('Vehicle creation failed');
-                    vehicleId = nv.id;
-                }
-            } else {
-                const { data: nc, error: ce } = await supabase.from('customers').insert({ full_name: name.trim(), phone: phone_, credit_limit: 0, current_balance: 0, loyalty_points: 0, notes: 'Client Kiosque' }).select('id').maybeSingle();
-                if (ce) throw ce;
-                if (!nc) throw new Error('Customer creation failed');
-                customerId = nc.id;
-                const { data: nv, error: ve } = await supabase.from('vehicles').insert({ customer_id: customerId, plate_number: plate.trim(), brand: brand.trim(), model: 'Inconnu', year: new Date().getFullYear() }).select('id').maybeSingle();
-                if (ve) throw ve;
-                if (!nv) throw new Error('Vehicle creation failed');
-                vehicleId = nv.id;
-            }
-
-            const { data: newTicket, error: te } = await supabase.from('queue_tickets').insert({
-                customer_id: customerId, vehicle_id: vehicleId, status: 'pending', priority: 'normal',
-                subtotal: 0, tax_rate: 0, tax_amount: 0, discount: 0, total_amount: 0, paid_amount: 0,
-                notes: 'Ticket Kiosque', service_ids: [], product_items: [],
-            }).select('ticket_number').maybeSingle();
-            if (te) throw te;
-            if (!newTicket?.ticket_number) throw new Error('Ticket creation failed — no number assigned');
-
-            setMyTicket({ number: newTicket.ticket_number, position: pending.length + 1 });
+            setMyTicket({ number: ticketNumber, position: pending.length + 1 });
             setStep('ticket');
         } catch (err) {
             console.error(err);
