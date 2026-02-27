@@ -40,7 +40,7 @@ export function Kiosk() {
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [myTicket, setMyTicket] = useState<{ number: string; position: number } | null>(null);
+    const [myTicket, setMyTicket] = useState<{ number: string; position: number; created_at: string; name: string; phone: string; estimatedMinutes: number } | null>(null);
     const [now, setNow] = useState(new Date());
 
     // Auto-refresh clock
@@ -126,7 +126,8 @@ export function Kiosk() {
             });
 
             const position = pendingTickets.length + 1;
-            setMyTicket({ number: ticketNumber, position });
+            const estimatedMinutes = pendingTickets.length * 15;
+            setMyTicket({ number: ticketNumber, position, created_at: new Date().toISOString(), name: name.trim(), phone: phone.trim(), estimatedMinutes });
             setStep('ticket');
         } catch (err) {
             console.error(err);
@@ -358,13 +359,49 @@ export function Kiosk() {
                                     <div className="w-16 h-16 bg-green-500/20 border border-green-500/30 rounded-full flex items-center justify-center mx-auto mb-4">
                                         <CheckCircle className="w-8 h-8 text-green-400" />
                                     </div>
-                                    <p className="text-xs text-orange-400 font-black uppercase tracking-[0.3em] mb-4">Votre ticket</p>
-                                    <div className="text-8xl font-black text-white mb-1 tabular-nums">#{myTicket.number}</div>
-                                    <p className="text-white/40 text-sm mt-4">
+                                    <p className="text-xs text-orange-400 font-black uppercase tracking-[0.3em] mb-3">Ticket confirmé</p>
+                                    <div className="text-8xl font-black text-white mb-3 tabular-nums">#{myTicket.number}</div>
+                                    <p className="text-white/40 text-sm">
                                         {myTicket.position === 1
                                             ? '🎉 Vous êtes le prochain !'
                                             : `${myTicket.position - 1} véhicule${myTicket.position > 2 ? 's' : ''} avant vous`}
                                     </p>
+
+                                    <div className="mt-6 grid grid-cols-2 gap-3 text-left">
+                                        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                                            <User className="w-4 h-4 text-orange-400" />
+                                            <div>
+                                                <p className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Client</p>
+                                                <p className="text-xs text-white font-semibold">{myTicket.name}</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                                            <Phone className="w-4 h-4 text-orange-400" />
+                                            <div>
+                                                <p className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Téléphone</p>
+                                                <p className="text-xs text-white font-semibold">{myTicket.phone || 'Non renseigné'}</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                                            <Clock className="w-4 h-4 text-orange-400" />
+                                            <div>
+                                                <p className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Heure</p>
+                                                <p className="text-xs text-white font-semibold">
+                                                    {new Date(myTicket.created_at).toLocaleTimeString('fr-DZ', { hour: '2-digit', minute: '2-digit' })}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                                            <Hash className="w-4 h-4 text-orange-400" />
+                                            <div>
+                                                <p className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Attente</p>
+                                                <p className="text-xs text-white font-semibold">
+                                                    {myTicket.estimatedMinutes > 0 ? `~${myTicket.estimatedMinutes} min` : 'Immédiat'}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div className="mt-6 flex items-center justify-center gap-2 text-xs text-white/40">
                                         <Hash className="w-3 h-3" />
                                         <span>Surveillez le numéro sur l'écran en haut</span>

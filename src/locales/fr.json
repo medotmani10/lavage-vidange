@@ -26,6 +26,8 @@
     "active": "Actif",
     "inactive": "Inactif",
     "pending": "En attente",
+    "in_progress": "En cours",
+    "inProgress": "En cours",
     "completed": "Terminé",
     "cancelled": "Annulé",
     "language": "Langue",

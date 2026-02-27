@@ -57,17 +57,24 @@ export function Queue() {
   const inProgressTickets = filteredTickets.filter((t) => t.status === 'in_progress');
   const completedTickets = filteredTickets.filter((t) => t.status === 'completed');
 
-  const ColumnHeader = ({ title, count, colorClass, icon: Icon }: any) => (
-    <div className="flex items-center justify-between mb-4 border-b border-[var(--border)] pb-3">
-      <div className="flex items-center gap-2">
-        <Icon className={`w-5 h-5 ${colorClass}`} />
-        <h2 className="text-lg font-semibold text-white">{title}</h2>
-      </div>
-      <span className="bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border)] px-2.5 py-0.5 rounded-full text-xs font-bold">
-        {count}
-      </span>
+interface ColumnHeaderProps {
+  title: string;
+  count: number;
+  colorClass: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+const ColumnHeader = ({ title, count, colorClass, icon: Icon }: ColumnHeaderProps) => (
+  <div className="flex items-center justify-between mb-4 border-b border-[var(--border)] pb-3">
+    <div className="flex items-center gap-2">
+      <Icon className={`w-5 h-5 ${colorClass}`} />
+      <h2 className="text-lg font-semibold text-white">{title}</h2>
     </div>
-  );
+    <span className="bg-[var(--bg-panel)] text-[var(--text-secondary)] border border-[var(--border)] px-2.5 py-0.5 rounded-full text-xs font-bold">
+      {count}
+    </span>
+  </div>
+);
 
   const EmptyState = ({ text }: { text: string }) => (
     <div className="flex flex-col items-center justify-center p-8 text-center bg-[var(--bg-surface)] border border-dashed border-[var(--border-lg)] rounded-xl">

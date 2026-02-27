@@ -47,13 +47,18 @@ export function TicketCard({ ticket, onUpdateStatus }: TicketCardProps) {
       <div className="flex items-start justify-between mb-3 gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span className="font-bold text-white text-base">#{ticket.ticket_number}</span>
+            <span className="font-bold text-white text-base">{ticket.ticket_number ? `#${ticket.ticket_number}` : '#...'}</span>
             {ticket.priority !== 'normal' && (
               <span className={`badge ${ticket.priority === 'vip' ? 'badge-vip' : 'badge-pending'} text-[10px]`}>
                 {t(`queue.priority.${ticket.priority}`)}
               </span>
             )}
           </div>
+          <p className="text-xs text-[var(--text-muted)] font-medium">
+            {new Date(ticket.created_at).toLocaleDateString('fr-DZ', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+            {' '}
+            {new Date(ticket.created_at).toLocaleTimeString('fr-DZ', { hour: '2-digit', minute: '2-digit' })}
+          </p>
           <p className="text-sm text-[var(--text-secondary)] truncate">
             {ticket.customer?.full_name || 'Client Passager'}
           </p>

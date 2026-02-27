@@ -39,7 +39,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      let tickets = await db.queue_tickets.orderBy('created_at').reverse().toArray();
+      let tickets = await db.queue_tickets.orderBy('created_at').toArray();
 
       if (status && status.length > 0) {
         tickets = tickets.filter(t => status.includes(t.status));
@@ -105,7 +105,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       const newTicketId = crypto.randomUUID();
       const newTicket = {
         id: newTicketId,
-        ticket_number: `TKT-${Math.floor(Math.random() * 1000000)}`,
+        ticket_number: null,
         customer_id: ticketData.customer_id,
         vehicle_id: ticketData.vehicle_id,
         priority: ticketData.priority || 'normal',
